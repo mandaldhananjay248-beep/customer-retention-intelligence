@@ -1,0 +1,23 @@
+risk_level,primary_action,customer_count,percentage_of_customers
+low,No intervention,681,0.498
+low,Billing / payment assistance,236,0.173
+low,Customer-support follow-up,154,0.113
+low,Re-engagement campaign,138,0.101
+low,Engagement campaign / product education,25,0.018
+medium,No intervention,27347,20.005
+medium,Re-engagement campaign,15262,11.165
+medium,Billing / payment assistance,13425,9.821
+medium,Customer-support follow-up,10825,7.919
+medium,Engagement campaign / product education,2076,1.519
+high,No intervention,19559,14.308
+high,Priority retention outreach,15559,11.382
+high,Re-engagement campaign,11287,8.257
+high,Customer-support follow-up,10187,7.452
+high,Billing / payment assistance,5658,4.139
+high,Engagement campaign / product education,1005,0.735
+critical,Customer-support follow-up,1321,0.966
+critical,Priority retention outreach,890,0.651
+critical,No intervention,632,0.462
+critical,Billing / payment assistance,230,0.168
+critical,Re-engagement campaign,201,0.147
+critical,Engagement campaign / product education,3,0.002

@@ -1,0 +1,78 @@
+# Phase 9 Next-Best-Action business configuration.
+#
+# Every threshold below is a BUSINESS DECISION THRESHOLD, chosen for
+# interpretability and operational usability against this dataset's
+# observed feature distributions (see notebooks/09_next_best_action.ipynb
+# section 1 for the percentile analysis behind each choice). None of them
+# are statistically optimized against any objective (e.g. maximizing
+# precision/recall or expected retention value) -- they are a documented
+# starting point for the business/retention team to revise as real
+# intervention outcomes accumulate. Keeping them here, instead of
+# hard-coded in src/recommendations/, is what makes that revision possible
+# without touching code.
+
+# Risk bands on predicted churn probability (from the frozen Phase 7
+# Logistic Regression). probability < low -> "low"; low <= probability
+# < medium -> "medium"; medium <= probability < high -> "high";
+# probability >= high -> "critical".
+risk_thresholds:
+  low: 0.20
+  medium: 0.50
+  high: 0.80
+
+# Intervention priority bands on the same predicted probability.
+# probability < medium -> "low" priority; medium <= probability < high
+# -> "medium"; high <= probability < urgent -> "high"; probability
+# >= urgent -> "urgent". multi_signal_bump raises the priority by one
+# level (capped at "urgent") whenever 2+ signal categories below are
+# triggered simultaneously -- priority reflects both how likely a
+# customer is to churn AND how many distinct problems were observed.
+priority_thresholds:
+  medium: 0.35
+  high: 0.65
+  urgent: 0.85
+  multi_signal_bump: true
+
+# Feature-based signal detection thresholds. Each category is checked
+# independently by src/recommendations/rules.py; a missing/NaN feature
+# simply fails to trigger that specific condition rather than raising.
+signal_thresholds:
+  # Sustained low activity: bottom-quartile-ish on both active days and
+  # active minutes over the last 90 days (25th percentiles are ~10 days
+  # and ~13.8 minutes in the current feature dataset).
+  low_engagement:
+    active_days_90d_max: 10
+    avg_active_minutes_90d_max: 14.0
+
+  # A meaningful recent decline vs. the prior period, on any one of the
+  # three engagement-change features (25th percentiles are all roughly
+  # -20% to -30% already, so -30% flags a clearly-below-typical drop).
+  reduced_usage:
+    active_minutes_pct_change_30d_max: -30.0
+    login_count_pct_change_30d_max: -30.0
+    feature_usage_count_pct_change_30d_max: -30.0
+
+  # Any sign of unresolved or unhappy support interactions in the last
+  # 90 days.
+  support_problems:
+    pending_ticket_count_90d_min: 1
+    high_critical_ticket_count_90d_min: 1
+    avg_satisfaction_90d_max: 2.5
+
+  # Payment friction: repeated failures, a high failure rate, or a long
+  # gap since the last successful transaction (90th percentiles are ~1
+  # failed transaction, ~0.2 failure rate, ~64 days since last success).
+  payment_problems:
+    txn_failed_count_90d_min: 2
+    txn_failed_rate_90d_min: 0.2
+    days_since_last_successful_transaction_min: 60
+
+# Human-readable labels for each action key used throughout the code and
+# in reports/customer_recommendations.csv.
+actions:
+  priority_retention_outreach: "Priority retention outreach"
+  billing_payment_assistance: "Billing / payment assistance"
+  customer_support_follow_up: "Customer-support follow-up"
+  re_engagement_campaign: "Re-engagement campaign"
+  engagement_campaign: "Engagement campaign / product education"
+  no_intervention: "No intervention"

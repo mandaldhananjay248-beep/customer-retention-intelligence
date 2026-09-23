@@ -1,0 +1,38 @@
+# Phase 10 MLflow tracking configuration.
+#
+# Local, file/SQLite-backed setup -- no cloud infrastructure required.
+# `backend_store_uri` and `artifact_location` are resolved relative to the
+# project root by src/models/mlflow_tracking.configure_tracking(), so this
+# works the same way regardless of the caller's current working directory.
+# Both mlruns.db and mlartifacts/ are generated locally and are excluded
+# from version control (see .gitignore) -- they are reproducible from this
+# config plus the already-tracked Phase 7 model artifact and reports.
+
+tracking:
+  backend_store_uri: "sqlite:///mlruns.db"
+  artifact_location: "mlartifacts"
+
+experiment:
+  name: "customer-churn-prediction"
+
+registry:
+  model_name: "customer-churn-logistic-regression"
+
+model:
+  # mlflow.sklearn's default "skops" serialization flags this pipeline's
+  # numpy.dtype objects (inside its ColumnTransformer) as untrusted and
+  # refuses to save it. "pickle" is used instead, consistent with how the
+  # Phase 7 artifact is already persisted (joblib, which is itself a
+  # pickle-based format) -- this is our own trusted, locally-produced
+  # model, not one loaded from an untrusted third party.
+  serialization_format: "pickle"
+
+# The frozen Phase 7 selection. load_registered_model() refuses to return
+# anything that doesn't match this exactly -- see
+# src/models/mlflow_tracking.validate_model_compatibility.
+expected_model:
+  model_type: "LogisticRegression"
+  C: 0.01
+  class_weight: "balanced"
+
+random_seed: 42

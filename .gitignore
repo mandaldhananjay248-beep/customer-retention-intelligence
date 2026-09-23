@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+.DS_Store
+mlruns/
+mlartifacts/
+*.db
+*.pkl
+*.joblib
+
+# Generated and large data artifacts
+data/raw/*
+data/processed/*
+data/external/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+
+# Tool-generated caches/logs -- not source, safe to regenerate
+.pytest_cache/
+catboost_info/
+
+# Large generated inference output (~50MB+), fully reproducible via
+# src/recommendations/next_best_action.py -- deliberately never committed,
+# consistent with how Phase 10's MLflow tracking also excludes it.
+reports/customer_recommendations.csv
