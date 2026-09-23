@@ -234,3 +234,108 @@ def render_supporting_features_table(row: pd.Series, compact_features: tuple[str
         # numeric/unconverted since its features are homogeneous.
         all_df = pd.DataFrame({"Feature": row.index, "Value": [str(v) for v in row.values]})
         st.dataframe(all_df, hide_index=True, width="stretch", height=400)
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: monitoring tab -- every number here is read directly from a
+# GET /monitoring/* response. Nothing is computed in the dashboard.
+# ---------------------------------------------------------------------------
+
+DRIFT_STATUS_COLORS = {
+    "no_significant_shift": "#2E7D32",
+    "moderate_shift": "#F9A825",
+    "significant_shift": "#C62828",
+    "insufficient_data": "#9E9E9E",
+    "no_baseline": "#9E9E9E",
+}
+
+
+def render_monitoring_health_summary(monitoring_health: APIResult) -> None:
+    if not (monitoring_health.ok and isinstance(monitoring_health.data, dict)):
+        st.error("Monitoring health is unavailable.")
+        return
+
+    data = monitoring_health.data
+    cols = st.columns(4)
+    cols[0].metric("API Status", data.get("api_status", "unknown").title())
+    cols[1].metric("Model Status", data.get("model_status", "unknown").title())
+    cols[2].metric("Drift Monitoring", data.get("drift_monitoring_status", "unknown").title())
+    model_label = data.get("model_name") or "n/a"
+    version_label = data.get("model_version") or "n/a"
+    cols[3].metric("Model", f"{model_label} v{version_label}" if model_label != "n/a" else "n/a")
+
+
+def render_request_metrics_section(metrics: APIResult) -> None:
+    if not (metrics.ok and isinstance(metrics.data, dict)):
+        st.error("Request metrics are unavailable.")
+        return
+
+    data = metrics.data
+    cols = st.columns(3)
+    cols[0].metric("Total Requests", f"{data['total_requests']:,}")
+    cols[1].metric("Successful", f"{data['successful_requests']:,}")
+    cols[2].metric("Failed", f"{data['failed_requests']:,}")
+
+    latency = data.get("latency_ms", {})
+    st.markdown("**Latency (ms)**")
+    latency_cols = st.columns(4)
+    latency_cols[0].metric("Average", f"{latency['avg']:.1f}" if latency.get("avg") is not None else "n/a")
+    latency_cols[1].metric("p50", f"{latency['p50']:.1f}" if latency.get("p50") is not None else "n/a")
+    latency_cols[2].metric("p95", f"{latency['p95']:.1f}" if latency.get("p95") is not None else "n/a")
+    latency_cols[3].metric("Max", f"{latency['max']:.1f}" if latency.get("max") is not None else "n/a")
+
+    if data.get("requests_by_endpoint"):
+        st.markdown("**Requests by Endpoint**")
+        endpoint_df = pd.DataFrame(
+            {"Endpoint": list(data["requests_by_endpoint"].keys()), "Count": list(data["requests_by_endpoint"].values())}
+        ).sort_values("Count", ascending=False)
+        st.dataframe(endpoint_df, hide_index=True, width="stretch")
+
+
+def render_prediction_metrics_section(metrics: APIResult) -> None:
+    if not (metrics.ok and isinstance(metrics.data, dict)):
+        st.error("Prediction metrics are unavailable.")
+        return
+
+    predictions = metrics.data.get("predictions", {})
+    cols = st.columns(4)
+    cols[0].metric("Total Predictions", f"{predictions.get('total_predictions', 0):,}")
+    cols[1].metric("Positive", f"{predictions.get('positive_predictions', 0):,}")
+    cols[2].metric("Negative", f"{predictions.get('negative_predictions', 0):,}")
+    cols[3].metric("Failed", f"{predictions.get('failed_predictions', 0):,}")
+
+    avg_prob = predictions.get("average_predicted_probability")
+    avg_inference_ms = predictions.get("average_inference_time_ms")
+    caption_parts = []
+    if avg_prob is not None:
+        caption_parts.append(f"Average predicted probability (recent window): {avg_prob:.1%}")
+    if avg_inference_ms is not None:
+        caption_parts.append(f"Average inference time: {avg_inference_ms:.1f} ms")
+    if caption_parts:
+        st.caption(" · ".join(caption_parts))
+
+
+def render_drift_section(drift: APIResult) -> None:
+    if drift.status_code == 503:
+        st.info("Drift monitoring is unavailable (no baseline was loaded at API startup).")
+        return
+    if not (drift.ok and isinstance(drift.data, dict)):
+        st.error("Drift monitoring is unavailable.")
+        return
+
+    data = drift.data
+    cols = st.columns(3)
+    cols[0].metric("Drifted Features", data.get("drifted_feature_count", 0))
+    prediction_drift = data.get("prediction_drift", {})
+    cols[1].metric("Prediction Drift", prediction_drift.get("status", "unknown").replace("_", " ").title())
+    psi_value = prediction_drift.get("psi")
+    cols[2].metric("Prediction PSI", f"{psi_value:.3f}" if psi_value is not None else "n/a")
+
+    feature_drift = data.get("feature_drift", [])
+    if feature_drift:
+        st.markdown("**Feature Drift (PSI vs. training baseline)**")
+        drift_df = pd.DataFrame(feature_drift)
+        st.dataframe(drift_df, hide_index=True, width="stretch")
+
+    st.caption(data.get("note", ""))
+    st.caption(f"Baseline: {data.get('baseline_source', 'n/a')}")

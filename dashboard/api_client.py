@@ -125,6 +125,21 @@ def get_model_info(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> APIResult:
     return _request("GET", "/model-info", timeout=timeout)
 
 
+def get_monitoring_metrics(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> APIResult:
+    """Phase 14: request/prediction metrics from GET /monitoring/metrics."""
+    return _request("GET", "/monitoring/metrics", timeout=timeout)
+
+
+def get_monitoring_health(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> APIResult:
+    """Phase 14: operational health from GET /monitoring/health."""
+    return _request("GET", "/monitoring/health", timeout=timeout)
+
+
+def get_monitoring_drift(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> APIResult:
+    """Phase 14: data/prediction drift signals from GET /monitoring/drift."""
+    return _request("GET", "/monitoring/drift", timeout=timeout)
+
+
 def predict(payload: dict, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> APIResult:
     return _request("POST", "/predict", json_body=payload, timeout=timeout)
 

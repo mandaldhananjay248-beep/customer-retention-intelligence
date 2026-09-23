@@ -25,9 +25,12 @@ import pandas as pd
 from src.models import baseline as bl
 from src.models import explainability as ex
 from src.models import mlflow_tracking as mt
+from src.monitoring.drift import DriftMonitor, select_top_numeric_features_by_shap
 from src.recommendations import next_best_action as nba
 
 logger = logging.getLogger("api.services")
+
+SHAP_IMPORTANCE_REPORT_PATH = bl.REPORTS_DIR / "shap_feature_importance.csv"
 
 
 class ModelUnavailableError(RuntimeError):
@@ -82,6 +85,7 @@ class ModelService:
         self.shap_context: dict | None = None
         self.recommendation_config: dict | None = None
         self.mlflow_config: dict | None = None
+        self.drift_monitor: DriftMonitor | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -141,9 +145,29 @@ class ModelService:
                 self.pipeline, splits["train"][self.feature_columns], self.categorical_columns
             )
 
+            # Phase 14 drift baseline. Never a second copy of the model or
+            # its preprocessing: reuses the already-loaded self.pipeline
+            # (via nba.predict_risk, the same scoring path predict_probability
+            # uses) purely to score the VALIDATION split once at startup --
+            # an out-of-sample reference for the prediction-drift baseline,
+            # never used to select or retrain anything.
+            try:
+                shap_importance = pd.read_csv(SHAP_IMPORTANCE_REPORT_PATH)
+                top_numeric_features = select_top_numeric_features_by_shap(shap_importance, self.numeric_columns)
+                self.drift_monitor = DriftMonitor(splits["train"], top_numeric_features, self.categorical_columns)
+                validation_probabilities = nba.predict_risk(self.pipeline, splits["validation"][self.feature_columns])
+                self.drift_monitor.set_prediction_baseline(validation_probabilities)
+            except FileNotFoundError:
+                logger.error(
+                    "Drift monitoring baseline unavailable: %s not found. "
+                    "Run Phase 8 (src/models/explainability.py) to generate it.",
+                    SHAP_IMPORTANCE_REPORT_PATH,
+                )
+                self.drift_monitor = None
+
             logger.info(
-                "Model service ready: model=%s version=%s features=%d",
-                model_name, self.model_version, len(self.feature_columns),
+                "Model service ready: model=%s version=%s features=%d drift_monitor=%s",
+                model_name, self.model_version, len(self.feature_columns), self.drift_monitor is not None,
             )
         except ModelUnavailableError:
             self.pipeline = None

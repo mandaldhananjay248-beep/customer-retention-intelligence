@@ -47,9 +47,13 @@ from dashboard.components import (
     render_api_status,
     render_disclaimer,
     render_error_banner,
+    render_drift_section,
     render_model_info_sidebar,
+    render_monitoring_health_summary,
+    render_prediction_metrics_section,
     render_prediction_summary,
     render_recommendation_section,
+    render_request_metrics_section,
     render_risk_distribution_chart,
     render_shap_section,
     render_supporting_features_table,
@@ -61,6 +65,7 @@ RECOMMENDATION_SUMMARY_PATH = PROJECT_ROOT / "reports" / "recommendation_summary
 TUNING_RESULTS_PATH = PROJECT_ROOT / "reports" / "tuning_results.csv"
 
 HEALTH_CACHE_TTL_SECONDS = 15
+MONITORING_CACHE_TTL_SECONDS = 5
 ANALYSIS_TOP_K = 5
 
 
@@ -115,6 +120,21 @@ def cached_health() -> api_client.APIResult:
 @st.cache_data(ttl=HEALTH_CACHE_TTL_SECONDS, show_spinner=False)
 def cached_model_info() -> api_client.APIResult:
     return api_client.get_model_info()
+
+
+@st.cache_data(ttl=MONITORING_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_metrics() -> api_client.APIResult:
+    return api_client.get_monitoring_metrics()
+
+
+@st.cache_data(ttl=MONITORING_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_health() -> api_client.APIResult:
+    return api_client.get_monitoring_health()
+
+
+@st.cache_data(ttl=MONITORING_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_drift() -> api_client.APIResult:
+    return api_client.get_monitoring_drift()
 
 
 def get_customer_snapshot_row(features_df: pd.DataFrame, customer_id: str, snapshot_date) -> pd.Series:
@@ -193,8 +213,8 @@ def main() -> None:
     render_disclaimer(DISCLAIMER_TEXT)
 
     # -- Main content -------------------------------------------------------
-    overview_tab, customer_analysis_tab, model_info_tab = st.tabs(
-        ["Overview", "Customer Analysis", "Model Information"]
+    overview_tab, customer_analysis_tab, model_info_tab, monitoring_tab = st.tabs(
+        ["Overview", "Customer Analysis", "Model Information", "Monitoring"]
     )
 
     with overview_tab:
@@ -205,6 +225,9 @@ def main() -> None:
 
     with model_info_tab:
         _render_model_info_tab(model_info_result)
+
+    with monitoring_tab:
+        _render_monitoring_tab()
 
 
 def _render_overview_tab(health_result: api_client.APIResult) -> None:
@@ -337,6 +360,40 @@ def _render_model_info_tab(model_info_result: api_client.APIResult) -> None:
         st.caption(f"Hyperparameters: {tuning_row['hyperparameters']}")
     else:
         st.caption("No Phase 7 tuning report found at reports/tuning_results.csv.")
+
+    render_disclaimer(DISCLAIMER_TEXT)
+
+
+def _render_monitoring_tab() -> None:
+    """Phase 14: everything here is read directly from GET /monitoring/*
+    responses -- the dashboard never computes a metric or a drift value
+    itself.
+    """
+    st.subheader("Monitoring & Observability")
+    st.caption(
+        "In-process metrics collected by the FastAPI service since it last started (reset on "
+        "restart) -- request traffic, model inference outcomes, and data/prediction drift "
+        "versus the Phase 7 training baseline."
+    )
+
+    monitoring_health_result = cached_monitoring_health()
+    monitoring_metrics_result = cached_monitoring_metrics()
+    monitoring_drift_result = cached_monitoring_drift()
+
+    st.markdown("#### API & Model Health")
+    render_monitoring_health_summary(monitoring_health_result)
+
+    st.divider()
+    st.markdown("#### Request Metrics")
+    render_request_metrics_section(monitoring_metrics_result)
+
+    st.divider()
+    st.markdown("#### Prediction Metrics")
+    render_prediction_metrics_section(monitoring_metrics_result)
+
+    st.divider()
+    st.markdown("#### Drift Monitoring")
+    render_drift_section(monitoring_drift_result)
 
     render_disclaimer(DISCLAIMER_TEXT)
 

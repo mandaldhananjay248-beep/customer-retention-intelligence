@@ -25,7 +25,10 @@ from __future__ import annotations
 
 import logging
 import math
+import time
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -39,20 +42,38 @@ from api.schemas import (
     CustomerAnalysisResponse,
     ExplanationRequest,
     ExplanationResponse,
+    FeatureDriftResult,
     HealthResponse,
+    LatencyStats,
     ModelInfoResponse,
+    MonitoringDriftResponse,
+    MonitoringHealthResponse,
+    MonitoringMetricsResponse,
+    PredictionDriftResult,
+    PredictionMetricsSummary,
     PredictionRequest,
     PredictionResponse,
     RecommendationRequest,
     RecommendationResponse,
 )
 from api.services import ModelService, ModelUnavailableError
+from src.models.baseline import CLASSIFICATION_THRESHOLD
+from src.monitoring.logging_config import configure_logging, log_request
+from src.monitoring.metrics import PredictionMetrics, RequestMetrics
 from src.recommendations.next_best_action import assign_risk_level
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+configure_logging()
 logger = logging.getLogger("api.main")
 
 MAX_REQUEST_BODY_BYTES = 1_000_000  # 1 MB -- generous for a ~130-feature JSON row
+
+# Phase 14: process-lifetime, in-memory only (see src/monitoring/metrics.py's
+# docstring for why) -- created once at import time since neither depends on
+# the model being loaded. The model-dependent drift monitor instead lives on
+# ModelService itself (api/services.py), built once at startup alongside the
+# SHAP context it mirrors.
+request_metrics = RequestMetrics()
+prediction_metrics = PredictionMetrics(classification_threshold=CLASSIFICATION_THRESHOLD)
 
 
 class MaxBodySizeMiddleware:
@@ -87,6 +108,51 @@ class MaxBodySizeMiddleware:
             return
 
         await self.app(scope, receive, send)
+
+
+class RequestMonitoringMiddleware:
+    """Phase 14: records request-level metrics (request_metrics), emits one
+    structured access-log line per request (src.monitoring.logging_config),
+    and attaches an X-Request-ID to every response -- preserving a
+    client-supplied one if present, generating a UUID4 otherwise.
+
+    Plain ASGI, not BaseHTTPMiddleware, for the exact same reason
+    MaxBodySizeMiddleware is -- see its docstring. Wrapping the downstream
+    call in try/finally means a request is recorded exactly once even if
+    something raises before a response is ever sent.
+    """
+
+    def __init__(self, app: FastAPI, metrics: RequestMetrics) -> None:
+        self.app = app
+        self.metrics = metrics
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        request_id = headers.get(b"x-request-id", b"").decode() or str(uuid.uuid4())
+        method = scope.get("method", "?")
+        path = scope.get("path", "?")
+        status_holder = {"code": 500}  # fallback if the app never sends a response start
+
+        async def send_wrapper(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                status_holder["code"] = message["status"]
+                response_headers = list(message.get("headers", []))
+                response_headers.append((b"x-request-id", request_id.encode()))
+                message = {**message, "headers": response_headers}
+            await send(message)
+
+        start = time.perf_counter()
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            status_code = status_holder["code"]
+            self.metrics.record_request(method, path, status_code, duration_ms)
+            log_request(method, path, status_code, duration_ms, request_id)
 
 
 @asynccontextmanager
@@ -136,6 +202,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(MaxBodySizeMiddleware)
+# Added last so it wraps outermost (Starlette applies middleware in
+# reverse registration order): every request/response passes through it,
+# including one MaxBodySizeMiddleware itself rejects with a 413.
+app.add_middleware(RequestMonitoringMiddleware, metrics=request_metrics)
 
 
 @app.exception_handler(Exception)
@@ -180,7 +250,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-def _safe_call(operation_name: str, func, *args, **kwargs) -> Any:
+def _safe_call(operation_name: str, func, *args, **kwargs) -> tuple[Any, float]:
     """Run one service-layer call, translating failures into the right HTTP
     status: ValueError (a problem the request schema couldn't catch on its
     own, e.g. a downstream consistency check) -> 422; anything else
@@ -190,18 +260,30 @@ def _safe_call(operation_name: str, func, *args, **kwargs) -> Any:
     version's actual enforcement point for "no stack trace leaks" -- a
     bare `@app.exception_handler(Exception)` does not intercept exceptions
     raised inside route handlers in this FastAPI/Starlette version.
+
+    Phase 14: also times the call and records the outcome as a prediction
+    metric (success timing returned to the caller; failure recorded here).
+    Every current caller is one of the four inference endpoints, so that
+    classification is accurate -- if a non-prediction caller is ever added,
+    split this responsibility out rather than assuming otherwise here.
+    Returns (result, duration_ms) on success.
     """
+    start = time.perf_counter()
     try:
-        return func(*args, **kwargs)
+        result = func(*args, **kwargs)
     except ValueError as exc:
+        prediction_metrics.record_failure()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except HTTPException:
+        prediction_metrics.record_failure()
         raise
     except Exception as exc:
+        prediction_metrics.record_failure()
         logger.error("Unexpected error during %s: %s", operation_name, type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error."
         ) from exc
+    return result, (time.perf_counter() - start) * 1000
 
 
 def _split_customer_payload(request_model: Any) -> tuple[dict[str, Any], str, Any]:
@@ -214,6 +296,23 @@ def _split_customer_payload(request_model: Any) -> tuple[dict[str, Any], str, An
     snapshot_date = payload.pop("snapshot_date")
     payload.pop("top_k", None)
     return payload, customer_id, snapshot_date
+
+
+def _record_prediction_observation(
+    service: ModelService, payload: dict[str, Any], probability: float, duration_ms: float
+) -> None:
+    """Phase 14: observe an already-computed prediction -- never
+    recomputes anything, and never alters what the endpoint returns.
+    Updates prediction_metrics and, if available, the model's drift
+    monitor with only its small monitored feature subset (never the full
+    ~130-feature payload, never a customer identifier).
+    """
+    null_field_count = sum(1 for value in payload.values() if value is None)
+    prediction_metrics.record_success(
+        probability, duration_ms, null_field_count=null_field_count, total_field_count=len(payload)
+    )
+    if service.drift_monitor is not None:
+        service.drift_monitor.record_observation(payload, probability)
 
 
 @app.get(
@@ -261,7 +360,8 @@ async def predict(request: PredictionRequest, service: ModelService = Depends(ge
     payload, customer_id, snapshot_date = _split_customer_payload(request)
     logger.info("POST /predict customer_id=%s", customer_id)
 
-    result = _safe_call("predict", service.predict, payload)
+    result, inference_ms = _safe_call("predict", service.predict, payload)
+    _record_prediction_observation(service, payload, result["churn_probability"], inference_ms)
 
     return PredictionResponse(
         customer_id=customer_id,
@@ -290,9 +390,10 @@ async def predict_explain(
     payload, customer_id, snapshot_date = _split_customer_payload(request)
     logger.info("POST /predict/explain customer_id=%s", customer_id)
 
-    explanation = _safe_call("predict_explain", service.explain, payload, top_k=request.top_k)
+    explanation, inference_ms = _safe_call("predict_explain", service.explain, payload, top_k=request.top_k)
 
     probability = explanation["predicted_probability"]
+    _record_prediction_observation(service, payload, probability, inference_ms)
     risk_level = assign_risk_level(probability, service.recommendation_config["risk_thresholds"])
 
     return ExplanationResponse(
@@ -325,7 +426,8 @@ async def recommend(
     payload, customer_id, snapshot_date = _split_customer_payload(request)
     logger.info("POST /recommend customer_id=%s", customer_id)
 
-    recommendation = _safe_call("recommend", service.recommend, payload, customer_id, snapshot_date)
+    recommendation, inference_ms = _safe_call("recommend", service.recommend, payload, customer_id, snapshot_date)
+    _record_prediction_observation(service, payload, recommendation["churn_probability"], inference_ms)
 
     return RecommendationResponse(
         customer_id=customer_id,
@@ -366,7 +468,10 @@ async def customer_analysis(
         recommendation = service.recommend(payload, customer_id, snapshot_date, probability=probability)
         return probability, risk_level, explanation, recommendation
 
-    probability, risk_level, explanation, recommendation = _safe_call("customer_analysis", _run_full_analysis)
+    (probability, risk_level, explanation, recommendation), inference_ms = _safe_call(
+        "customer_analysis", _run_full_analysis
+    )
+    _record_prediction_observation(service, payload, probability, inference_ms)
 
     prediction_response = PredictionResponse(
         customer_id=customer_id,
@@ -405,4 +510,102 @@ async def customer_analysis(
         prediction=prediction_response,
         explanation=explanation_response,
         recommendation=recommendation_response,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: monitoring / observability endpoints.
+#
+# These are read-only views over request_metrics, prediction_metrics, and
+# (per-request) service.drift_monitor -- all of which are only ever
+# updated as a side effect of real traffic through the endpoints above.
+# Nothing here performs inference, SHAP, or recommendation logic, and
+# nothing here returns a customer identifier, a raw feature value, a
+# filesystem path, or a credential.
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/monitoring/metrics",
+    response_model=MonitoringMetricsResponse,
+    tags=["monitoring"],
+    summary="Request and prediction metrics",
+    description=(
+        "In-process, in-memory metrics collected since this process started (reset on restart): "
+        "HTTP request counts/latency (every endpoint) and model-inference outcome counts "
+        "(the four prediction endpoints only). Never exposes a customer identifier or raw "
+        "feature value."
+    ),
+)
+async def monitoring_metrics() -> MonitoringMetricsResponse:
+    request_snapshot = request_metrics.snapshot()
+    prediction_snapshot = prediction_metrics.snapshot()
+    return MonitoringMetricsResponse(
+        total_requests=request_snapshot["total_requests"],
+        successful_requests=request_snapshot["successful_requests"],
+        failed_requests=request_snapshot["failed_requests"],
+        requests_by_endpoint=request_snapshot["requests_by_endpoint"],
+        requests_by_method=request_snapshot["requests_by_method"],
+        requests_by_status=request_snapshot["requests_by_status"],
+        latency_ms=LatencyStats(**request_snapshot["latency_ms"]),
+        predictions=PredictionMetricsSummary(**prediction_snapshot),
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@app.get(
+    "/monitoring/health",
+    response_model=MonitoringHealthResponse,
+    tags=["monitoring"],
+    summary="Operational health of the API, model, and monitoring subsystem",
+    description=(
+        "A richer, monitoring-oriented view than GET /health: also reports whether drift "
+        "monitoring has a usable baseline. Never exposes MLflow internals, tracking URIs, "
+        "or environment variables -- see GET /model-info for the same discipline."
+    ),
+)
+async def monitoring_health(request: Request) -> MonitoringHealthResponse:
+    service: ModelService | None = getattr(request.app.state, "model_service", None)
+    model_ready = service is not None and service.is_ready
+
+    return MonitoringHealthResponse(
+        api_status="healthy" if model_ready else "unhealthy",
+        model_status="available" if model_ready else "unavailable",
+        model_name=service.model_name if model_ready else None,
+        model_version=service.model_version if model_ready else None,
+        drift_monitoring_status="active" if (model_ready and service.drift_monitor is not None) else "unavailable",
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@app.get(
+    "/monitoring/drift",
+    response_model=MonitoringDriftResponse,
+    tags=["monitoring"],
+    summary="Data and prediction drift signals",
+    description=(
+        "Population Stability Index (PSI) for a small set of SHAP-important numeric features, "
+        "the categorical features, and the model's own prediction distribution, each compared "
+        "against a Phase 7 training-data baseline. PSI is a monitoring SIGNAL for investigation, "
+        "never proof that model performance has degraded -- see the `note` field."
+    ),
+)
+async def monitoring_drift(service: ModelService = Depends(get_model_service)) -> MonitoringDriftResponse:
+    if service.drift_monitor is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Drift monitoring is unavailable (its baseline report could not be loaded at startup).",
+        )
+
+    snapshot = service.drift_monitor.snapshot()
+    return MonitoringDriftResponse(
+        baseline_source=snapshot["baseline_source"],
+        monitored_numeric_features=snapshot["monitored_numeric_features"],
+        monitored_categorical_features=snapshot["monitored_categorical_features"],
+        feature_drift=[FeatureDriftResult(**item) for item in snapshot["feature_drift"]],
+        drifted_feature_count=snapshot["drifted_feature_count"],
+        drifted_features=snapshot["drifted_features"],
+        prediction_drift=PredictionDriftResult(**snapshot["prediction_drift"]),
+        psi_thresholds=snapshot["psi_thresholds"],
+        note=snapshot["note"],
+        generated_at=datetime.now(timezone.utc),
     )

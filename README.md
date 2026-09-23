@@ -85,8 +85,120 @@ that row's actual values.
 recommendation for a selected real customer/snapshot, via `POST /customer-analysis`),
 and Model Information (`GET /model-info` plus the Phase 7 tuning report).
 
-## Monitoring
-To be implemented.
+## Monitoring & Observability
+
+A lightweight, in-process monitoring layer (`src/monitoring/`) built on top of the
+existing FastAPI service -- no new infrastructure (no Prometheus/Grafana, no database,
+no external monitoring platform). Storage is in-memory only and resets when the API
+process restarts; see "Limitations" below.
+
+### What is monitored
+
+- **API requests** -- every HTTP request/response, via a middleware that wraps the
+  whole app.
+- **Model inference** -- only the four prediction endpoints (`/predict`,
+  `/predict/explain`, `/recommend`, `/customer-analysis`), tracked separately from
+  generic HTTP traffic.
+- **Model health** -- whether the registered model is loaded and usable, reusing the
+  existing `GET /model-info` metadata (never a second model load).
+- **Data quality** -- the rate of legitimately-null features in *accepted* requests.
+  This is additive, not a re-validation: missing fields, wrong types, and NaN/Infinity
+  values are already rejected with HTTP 422 by the existing Pydantic schema (Phase 11)
+  before a request ever reaches this layer.
+- **Data drift and prediction drift** -- see below.
+
+### Monitoring endpoints
+
+```bash
+curl http://localhost:8000/monitoring/metrics
+curl http://localhost:8000/monitoring/health
+curl http://localhost:8000/monitoring/drift
+```
+
+- `GET /monitoring/metrics` -- total/successful/failed request counts, counts by
+  endpoint/method/status code, latency (average since start, p50/p95/p99 over a
+  rolling window of the most recent 1000 requests), and prediction counts
+  (successful/failed/positive/negative, average predicted probability, average
+  inference time, average null-field rate).
+- `GET /monitoring/health` -- API status, model status/name/version, and whether drift
+  monitoring has a usable baseline. Always returns HTTP 200 (even when unhealthy), so
+  it can be polled to report *that* something is down.
+- `GET /monitoring/drift` -- see below. Returns HTTP 503 if the registered model itself
+  isn't available (drift monitoring is built alongside the model at startup).
+
+None of these expose a customer identifier, a raw feature value, a filesystem path, or
+a credential.
+
+### Request IDs
+
+Every response includes an `X-Request-ID` header: a client-supplied `X-Request-ID`
+request header is preserved, otherwise a UUID4 is generated. The same ID appears in
+the corresponding access-log line for correlating client- and server-side logs.
+
+### Logging
+
+A single structured access-log line per request (`api.access` logger):
+
+```text
+INFO request method=POST path=/customer-analysis status=200 duration_ms=123.4 request_id=...
+```
+
+This never includes the request or response body, query parameters, or headers --
+exactly where a raw feature value, a customer identifier beyond what Phase 11 already
+logged, or a credential could end up.
+
+### Data drift vs. prediction drift vs. model performance degradation
+
+These are three different things, and only the first two are actually monitored here:
+
+- **Data drift**: the distribution of *input features* in live traffic has shifted
+  compared to the data the model was trained on.
+- **Prediction drift**: the distribution of the model's *own predicted probabilities*
+  has shifted compared to its behavior on a held-out reference set.
+- **Model performance degradation**: the model is actually making worse predictions.
+  This requires ground-truth outcomes (`churn_next_30_days`), which are never
+  available at inference time -- **this project does not and cannot measure
+  performance degradation directly**. Drift is a signal that something changed and is
+  worth investigating; it is never presented as proof that the model is performing
+  worse.
+
+**Method:** Population Stability Index (PSI), a standard metric in churn/credit-risk
+monitoring, applied uniformly to (a) the top-8 numeric features by Phase 8's own SHAP
+importance ranking (`reports/shap_feature_importance.csv`), (b) the four categorical
+features, and (c) the model's predicted-probability distribution. The baseline is the
+Phase 7 **TRAIN** split for features and the **VALIDATION** split (out-of-sample) for
+predictions. Standard thresholds: PSI < 0.10 no significant shift, 0.10-0.25 moderate
+shift, >= 0.25 significant shift. At least 30 recent observations are required before
+a PSI is reported at all.
+
+### Streamlit dashboard
+
+A fourth **Monitoring** tab (alongside Overview, Customer Analysis, and Model
+Information) displays API/model health, request metrics, latency, prediction counts,
+and drift status -- every number read directly from a `GET /monitoring/*` response;
+the dashboard never computes a metric itself.
+
+### Docker
+
+No Docker configuration changes were needed: the monitoring endpoints are served by
+the existing `api` container on its existing port (8000), and the dashboard's existing
+`API_BASE_URL=http://api:8000` already routes the Monitoring tab's requests correctly.
+
+### Limitations
+
+- **In-memory only.** All counters and rolling windows reset when the API process
+  restarts (including a `docker compose restart api`). There is no persistent metrics
+  history or long-term trend storage -- a deliberate simplicity trade-off for this
+  project's scope, not an oversight.
+- **PSI is sensitive to sample size.** With 10 histogram bins, a comparison window of
+  only ~30-100 observations can produce a noisy PSI even with no real distributional
+  change; the reported status should be read alongside `sample_size`, not in isolation.
+- **Drift baselines are fixed at startup.** They are not periodically refreshed;
+  restarting the API recomputes them from whatever `data/processed/customer_features.parquet`
+  and the registered model currently are.
+- **No performance-degradation detection.** As explained above, this is a hard
+  limitation of monitoring without ground-truth labels, not something a smarter metric
+  would fix.
 
 ## Docker
 

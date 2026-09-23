@@ -79,6 +79,44 @@ def test_get_model_info_success_parsing() -> None:
     assert result.data == body
 
 
+def test_get_monitoring_metrics_success_parsing() -> None:
+    body = {"total_requests": 10, "successful_requests": 9, "failed_requests": 1, "predictions": {"total_predictions": 5}}
+    with patch("dashboard.api_client.requests.request", return_value=_mock_response(200, body)):
+        result = api_client.get_monitoring_metrics()
+
+    assert result.ok
+    assert result.data["total_requests"] == 10
+
+
+def test_get_monitoring_health_success_parsing() -> None:
+    body = {"api_status": "healthy", "model_status": "available", "drift_monitoring_status": "active"}
+    with patch("dashboard.api_client.requests.request", return_value=_mock_response(200, body)):
+        result = api_client.get_monitoring_health()
+
+    assert result.ok
+    assert result.data["api_status"] == "healthy"
+
+
+def test_get_monitoring_drift_success_parsing() -> None:
+    body = {"feature_drift": [], "drifted_feature_count": 0, "prediction_drift": {"status": "no_significant_shift"}}
+    with patch("dashboard.api_client.requests.request", return_value=_mock_response(200, body)):
+        result = api_client.get_monitoring_drift()
+
+    assert result.ok
+    assert result.data["drifted_feature_count"] == 0
+
+
+def test_get_monitoring_drift_unavailable_returns_503_result() -> None:
+    with patch(
+        "dashboard.api_client.requests.request",
+        return_value=_mock_response(503, {"detail": "Model service is unavailable."}),
+    ):
+        result = api_client.get_monitoring_drift()
+
+    assert not result.ok
+    assert result.status_code == 503
+
+
 def test_predict_success() -> None:
     body = {
         "customer_id": "C0001", "snapshot_date": "2025-06-30", "churn_probability": 0.42,
@@ -309,3 +347,31 @@ def test_dashboard_does_not_reference_joblib_model_path() -> None:
     for py_file in dashboard_dir.glob("*.py"):
         source = py_file.read_text()
         assert "tuned_logistic_regression.joblib" not in source, f"{py_file.name} references the raw model artifact directly"
+
+
+def test_monitoring_tab_is_wired_into_the_dashboard() -> None:
+    """Phase 14: the Monitoring tab must actually be registered as one of
+    st.tabs(...)'s labels and rendered via a dedicated function -- not
+    just mentioned in a comment somewhere.
+    """
+    source = Path(dashboard_app.__file__).read_text()
+    assert '"Monitoring"' in source
+    assert "_render_monitoring_tab" in source
+
+
+def test_monitoring_render_functions_only_read_api_results() -> None:
+    """The Phase 14 monitoring render functions must accept an APIResult
+    (or plain dict already sourced from one) and never import shap/mlflow/
+    sklearn -- covered generically by test_dashboard_modules_do_not_import_ml_libraries,
+    this additionally checks the specific functions exist and are exported
+    from components.py, so a broken import wouldn't silently pass.
+    """
+    from dashboard import components
+
+    for function_name in (
+        "render_monitoring_health_summary",
+        "render_request_metrics_section",
+        "render_prediction_metrics_section",
+        "render_drift_section",
+    ):
+        assert hasattr(components, function_name), f"dashboard.components.{function_name} is missing"
