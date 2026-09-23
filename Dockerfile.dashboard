@@ -1,0 +1,46 @@
+# Phase 13: Streamlit dashboard container.
+#
+# Runs the existing dashboard/app.py unchanged. This container never
+# loads the ML model, computes SHAP values, or evaluates recommendation
+# rules itself -- it only talks HTTP to the `api` service (see
+# docker-compose.yml's API_BASE_URL=http://api:8000) via
+# dashboard/api_client.py, exactly as it does locally against
+# `uvicorn api.main:app --reload`.
+#
+# Runtime dependency NOT baked into this image (see .dockerignore and
+# docker-compose.yml): data/processed/customer_features.parquet is a
+# git-ignored, developer-generated artifact supplied as a read-only bind
+# mount, used only to populate the customer/snapshot selection dropdowns
+# and to build API request payloads -- never to compute a prediction.
+
+FROM python:3.14-slim
+
+WORKDIR /app
+
+# Install Python dependencies first so this layer is cached across
+# source-code-only changes.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Application source (dashboard/, reports/*.csv, requirements.txt, etc.)
+# -- .dockerignore excludes .venv/, .git/, notebooks/, tests/, and every
+# git-ignored data/model artifact described above. api/ and src/ are also
+# copied in (single shared build context for both images) but are never
+# imported by dashboard/ code -- see tests/test_dashboard.py's import
+# guardrail test.
+COPY . .
+
+# Run as a non-root user.
+RUN groupadd --system app && useradd --system --gid app --home /app app \
+    && chown -R app:app /app
+USER app
+
+EXPOSE 8501
+
+# Streamlit's own built-in health endpoint (a pre-existing Streamlit
+# feature, not something added for this project) -- no second health
+# system is introduced.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)"
+
+CMD ["streamlit", "run", "dashboard/app.py", "--server.address", "0.0.0.0", "--server.port", "8501", "--server.headless", "true"]

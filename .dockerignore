@@ -1,0 +1,41 @@
+# Build-context exclusions for both Dockerfile.api and Dockerfile.dashboard.
+#
+# The model store (mlruns.db, mlartifacts/) and the processed feature
+# dataset (data/processed/) are intentionally NOT baked into either image
+# -- they are git-ignored, developer/environment-generated artifacts (see
+# .gitignore), so they are supplied to the containers as read-only bind
+# mounts in docker-compose.yml instead. This keeps the images small,
+# generic, and rebuildable without needing to re-copy ~25MB of local
+# state, and means a missing artifact fails clearly at container startup
+# (via the existing ModelService/FastAPI health check) rather than being
+# silently baked into a stale image layer.
+
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+.pytest_cache/
+.DS_Store
+mlruns/
+mlartifacts/
+*.db
+*.pkl
+*.joblib
+catboost_info/
+
+# Supplied via docker-compose.yml volume mounts at runtime, not copied
+# into the image -- see note above.
+data/raw/
+data/processed/
+data/external/
+
+# Large generated inference output (~50MB+), never needed by the API or
+# dashboard containers (matches .gitignore).
+reports/customer_recommendations.csv
+
+# Not needed inside either running container.
+notebooks/
+tests/
