@@ -2,7 +2,8 @@
 
 No business logic is duplicated here:
 
-- Churn scoring uses the registered MLflow pipeline (Phase 10) directly.
+- Churn scoring uses the registered MLflow pipeline (Phase 10) directly,
+  loaded from its portable packaged copy (Phase 15, models/registered/).
 - SHAP explanations reuse src.models.explainability's pure functions
   (Phase 8) completely unmodified.
 - Recommendations reuse src.recommendations.next_best_action (Phase 9)
@@ -114,10 +115,12 @@ class ModelService:
             self.numeric_columns, self.categorical_columns = bl.get_feature_columns(features)
             self.feature_columns = self.numeric_columns + self.categorical_columns
 
-            # load_registered_model (Phase 10) validates model type, C,
-            # and class_weight, raising ValueError on any mismatch --
-            # caught below and re-raised as ModelUnavailableError.
-            self.pipeline = mt.load_registered_model(config=self.mlflow_config)
+            # load_packaged_model (Phase 15) loads the committed copy of
+            # registry version 1 -- same MLflow loader and the same model
+            # type/C/class_weight validation as load_registered_model,
+            # plus a SHA-256 check -- raising on any mismatch, caught
+            # below and re-raised as ModelUnavailableError.
+            self.pipeline = mt.load_packaged_model(config=self.mlflow_config)
 
             # Additionally validate "expected feature structure": the raw
             # column names/order the registered model's preprocessor was
@@ -134,12 +137,8 @@ class ModelService:
                     "feature dataset's columns -- refusing to serve a schema-mismatched model."
                 )
 
-            client = mt.MlflowClient()
             model_name = self.mlflow_config["registry"]["model_name"]
-            versions = client.search_model_versions(f"name='{model_name}'")
-            if not versions:
-                raise ModelUnavailableError(f"No registered versions found for model '{model_name}'")
-            self.model_version = str(max(versions, key=lambda v: int(v.version)).version)
+            self.model_version = str(self.mlflow_config["packaged_model"]["version"])
 
             self.shap_context = nba.build_shap_context(
                 self.pipeline, splits["train"][self.feature_columns], self.categorical_columns

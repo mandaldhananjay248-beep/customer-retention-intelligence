@@ -26,6 +26,7 @@ record, never used to choose or tune anything.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 from datetime import datetime, timezone
@@ -52,6 +53,7 @@ from src.models.baseline import (
     VALIDATION_END,
     VALIDATION_START,
     CLASSIFICATION_THRESHOLD,
+    MODELS_DIR,
     evaluate_model,
     get_feature_columns,
     load_feature_dataset,
@@ -59,6 +61,10 @@ from src.models.baseline import (
 )
 
 CONFIG_PATH = PROJECT_ROOT / "configs" / "mlflow_config.yaml"
+
+# Where packaged registered-model versions live unless MODEL_ARTIFACT_ROOT
+# overrides it (see configs/mlflow_config.yaml's packaged_model section).
+DEFAULT_MODEL_ARTIFACT_ROOT = MODELS_DIR / "registered"
 
 # The report artifacts that are actually useful for reproducing/auditing
 # this run -- small, aggregated tables. Deliberately excludes
@@ -364,6 +370,43 @@ def load_registered_model(
         model_uri = f"models:/{model_name}/{latest.version}"
 
     pipeline = mlflow.sklearn.load_model(model_uri)
+    validate_model_compatibility(pipeline, config["expected_model"], expected_feature_count=expected_feature_count)
+    return pipeline
+
+
+def resolve_packaged_model_dir(config: dict | None = None) -> Path:
+    """Directory of the packaged registered model (configs/mlflow_config.yaml's
+    packaged_model.path), resolved against MODEL_ARTIFACT_ROOT if set,
+    otherwise against the project's models/registered/ -- never an absolute
+    developer-machine path.
+    """
+    config = config or load_config()
+    artifact_root = Path(os.environ.get("MODEL_ARTIFACT_ROOT") or DEFAULT_MODEL_ARTIFACT_ROOT)
+    return (artifact_root / config["packaged_model"]["path"]).resolve()
+
+
+def load_packaged_model(config: dict | None = None, expected_feature_count: int | None = None) -> Pipeline:
+    """Load the packaged copy of the registered model version (see
+    configs/mlflow_config.yaml's packaged_model section) with the same MLflow
+    sklearn loader load_registered_model uses, after verifying model.pkl's
+    SHA-256, and with the same compatibility validation. Portable: needs no
+    tracking database and no machine-specific artifact location.
+    """
+    config = config or load_config()
+    model_dir = resolve_packaged_model_dir(config)
+    model_file = model_dir / "model.pkl"
+    if not model_file.exists():
+        raise FileNotFoundError(f"Packaged model not found: {model_file}")
+
+    expected_sha256 = config["packaged_model"]["model_sha256"]
+    actual_sha256 = hashlib.sha256(model_file.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"Packaged model {model_file} SHA-256 {actual_sha256} does not match expected {expected_sha256} "
+            "-- refusing to load it."
+        )
+
+    pipeline = mlflow.sklearn.load_model(str(model_dir))
     validate_model_compatibility(pipeline, config["expected_model"], expected_feature_count=expected_feature_count)
     return pipeline
 

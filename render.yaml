@@ -1,0 +1,68 @@
+# Phase 15: Render Blueprint for the two existing containers.
+#
+#   Browser --HTTPS--> customer-retention-dashboard (Streamlit, Free plan)
+#                             | private network, http://<API_HOSTPORT>
+#                             v
+#                      customer-retention-api (FastAPI, 1c-2g plan)
+#                             |
+#                             v
+#                 packaged registered model / SHAP / recommendations
+#
+# Both services build from this repo's Dockerfiles, so they run the same
+# images Docker Compose and CI build. No secrets are needed or defined here.
+#
+# COST: customer-retention-api uses the paid `1c-2g` instance type (1 CPU,
+# 2 GB -- formerly "Standard") because the API peaks at ~860 MB while
+# loading, above the 512 MB of the Free and `0.5c-512mb` types. Check
+# current pricing at https://render.com/pricing before creating the
+# Blueprint. The dashboard uses the Free instance type (spins down after 15
+# idle minutes; roughly a minute to spin back up).
+#
+# REGION cannot be changed after creation, and both services must share one
+# region to talk over Render's private network. `oregon` is Render's default;
+# change both entries before creating the Blueprint if another region
+# (ohio, virginia, frankfurt, singapore) is closer to your users.
+#
+# DEPLOYS: autoDeployTrigger: checksPass deploys a new commit on `main` only
+# after its GitHub checks (.github/workflows/ci.yml) pass.
+
+services:
+  - type: web
+    name: customer-retention-api
+    runtime: docker
+    repo: https://github.com/mandaldhananjay248-beep/customer-retention-intelligence
+    branch: main
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    plan: 1c-2g
+    region: oregon
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      # Pin Render's routed port to the port the image's uvicorn CMD binds.
+      - key: PORT
+        value: "8000"
+
+  - type: web
+    name: customer-retention-dashboard
+    runtime: docker
+    repo: https://github.com/mandaldhananjay248-beep/customer-retention-intelligence
+    branch: main
+    dockerfilePath: ./Dockerfile.dashboard
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /_stcore/health
+    autoDeployTrigger: checksPass
+    envVars:
+      # Pin Render's routed port to the port the image's streamlit CMD binds.
+      - key: PORT
+        value: "8501"
+      # The API's private-network host:port. Free services can send (but
+      # not receive) private network traffic to paid services, so the
+      # dashboard never needs localhost or the API's public URL.
+      - key: API_HOSTPORT
+        fromService:
+          type: web
+          name: customer-retention-api
+          property: hostport

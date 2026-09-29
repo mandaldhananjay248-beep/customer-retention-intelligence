@@ -1,21 +1,25 @@
-# Phase 13: FastAPI inference service container.
+# Phase 13/15: FastAPI inference service container.
 #
-# Serves the frozen Phase 7 Logistic Regression via its Phase 10 MLflow
-# Model Registry entry, with Phase 8 SHAP explanations and Phase 9
-# next-best-action recommendations layered on top -- exactly as it runs
-# locally with `uvicorn api.main:app --reload`. No application code is
-# changed for containerization.
+# Serves the frozen Phase 7 Logistic Regression -- registered as MLflow
+# model version 1 in Phase 10 -- with Phase 8 SHAP explanations and Phase 9
+# next-best-action recommendations layered on top, exactly as it runs
+# locally with `uvicorn api.main:app --reload`.
 #
-# Runtime dependencies NOT baked into this image (see .dockerignore and
-# docker-compose.yml): data/processed/customer_features.parquet,
-# mlruns.db, and mlartifacts/ are git-ignored, developer-generated
-# artifacts supplied as read-only bind mounts at `docker compose up`
-# time. If they are missing on the host, the container still starts, but
-# /health reports "unhealthy" -- exactly the same failure mode as running
-# `uvicorn api.main:app --reload` locally without having run Phases 1-10
-# first. Nothing here invents a substitute model or dataset.
+# Phase 15 makes the image self-contained and portable (no host bind
+# mounts, no developer-machine paths), so the same image runs under Docker
+# Compose, in CI, and on Render:
+#   - Model: the committed packaged copy of registry version 1
+#     (models/registered/, SHA-256 verified at load). The local mlruns.db /
+#     mlartifacts registry is not needed and stays excluded.
+#   - Data: data/processed/customer_features.parquet is regenerated at
+#     build time from the committed, seeded Phase 1-4 pipeline and verified
+#     against the fingerprint of the dataset the model was registered with.
+#     No dataset is committed or downloaded, and nothing is retrained.
 
 FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
@@ -24,16 +28,21 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Application source (api/, src/, configs/, reports/*.csv, requirements.txt,
-# etc.) -- .dockerignore excludes .venv/, .git/, notebooks/, tests/, and
-# every git-ignored data/model artifact described above.
+# Application source (api/, src/, configs/, models/registered/,
+# reports/*.csv, etc.) -- .dockerignore excludes .venv/, .git/, notebooks/,
+# tests/, local data, and the local MLflow registry.
 COPY . .
+
+# Deterministic feature dataset (see header). --prune keeps only
+# customer_features.parquet, the one file the API reads.
+RUN python -m src.data.regenerate_feature_dataset --prune
 
 # Run as a non-root user.
 RUN groupadd --system app && useradd --system --gid app --home /app app \
     && chown -R app:app /app
 USER app
 
+# Render routes to this port via the PORT env var set in render.yaml.
 EXPOSE 8000
 
 # Uses the API's own existing GET /health endpoint -- no second health
@@ -42,7 +51,7 @@ EXPOSE 8000
 # 503 /health itself returns when the model failed to load); Python exits
 # non-zero on any uncaught exception, which is exactly what a Docker
 # HEALTHCHECK needs to mark the container unhealthy.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

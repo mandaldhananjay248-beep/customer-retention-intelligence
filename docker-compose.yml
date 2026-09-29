@@ -1,4 +1,4 @@
-# Phase 13: run the existing Customer Retention Intelligence stack as two
+# Phase 13/15: run the existing Customer Retention Intelligence stack as two
 # containers on Compose's default (automatically created) network, which
 # lets each service resolve the other by its service name.
 #
@@ -8,39 +8,15 @@
 #              api (FastAPI, host port 8000)
 #                  |
 #                  v
-#          existing MLflow-registered model / SHAP / recommendation code
+#          packaged MLflow registered model / SHAP / recommendation code
 #
-# Before running `docker compose up`, Phases 1-10 must already have been
-# run locally at least once, so that the git-ignored, developer-generated
-# artifacts below exist on the host to be mounted in:
-#   - data/processed/customer_features.parquet  (Phase 4)
-#   - mlruns.db and mlartifacts/                 (Phase 10)
-# These are intentionally NOT baked into either image (see .dockerignore)
-# -- see README.md's Docker section for what happens if they're missing.
-#
-# IMPORTANT, discovered while verifying this phase: MLflow's local
-# SQLite backend (mlruns.db) records each experiment/logged-model's
-# artifact_location as an ABSOLUTE HOST PATH at the moment Phase 10
-# registered the model (verified directly against mlruns.db's
-# `experiments` and `logged_models` tables: both point at
-# /Users/dhananjaymandal/customer-retention-intelligence/mlartifacts/...).
-# So mlartifacts/ must ALSO be reachable inside the container at that
-# exact absolute path, in addition to mlruns.db itself living at the
-# app's normal working directory (/app), where mlflow_tracking.py's own
-# path resolution expects to find it. This second mount target is
-# therefore machine-specific -- see README.md's Docker section for what
-# re-registering the model on a different host/path would require. No
-# application code, and no already-registered MLflow state, was changed
-# to work around this.
-#
-# mlartifacts/ is mounted read-write (not :ro): mlflow.sklearn.load_model
-# writes a small internal bookkeeping file (registered_model_meta) into
-# the artifact directory as part of loading an already-registered model
-# -- this is MLflow's own housekeeping, not retraining or a model
-# behavior change; the file it writes is metadata about the model
-# artifact's location, not the model itself. mlruns.db and
-# data/processed stay read-only since the API must never write a new
-# run or mutate the feature dataset.
+# Phase 15: both images are self-contained -- the packaged registered model
+# (models/registered/) is copied in and the feature dataset is regenerated
+# at build time from the committed, seeded pipeline (see Dockerfile.api).
+# No host bind mounts are needed, so the Phase 13 mounts of mlruns.db,
+# mlartifacts/ (including its developer-machine absolute path) and
+# data/processed/ are gone, and this file works from any checkout location.
+# The same images are what Render builds from render.yaml.
 
 services:
   api:
@@ -49,11 +25,6 @@ services:
       dockerfile: Dockerfile.api
     ports:
       - "8000:8000"
-    volumes:
-      - ./data/processed:/app/data/processed:ro
-      - ./mlruns.db:/app/mlruns.db:ro
-      - ./mlartifacts:/app/mlartifacts
-      - ./mlartifacts:/Users/dhananjaymandal/customer-retention-intelligence/mlartifacts
     restart: unless-stopped
 
   dashboard:
@@ -67,8 +38,6 @@ services:
       # name "api", not localhost -- inside the dashboard container,
       # localhost refers to the dashboard container itself.
       API_BASE_URL: http://api:8000
-    volumes:
-      - ./data/processed:/app/data/processed:ro
     depends_on:
       api:
         condition: service_healthy

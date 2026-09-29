@@ -9,6 +9,9 @@ mlartifacts/
 *.db
 *.pkl
 *.joblib
+# Phase 15: the one approved exception -- the packaged copy of the
+# registered model version (~55KB MLflow model directory) the API loads.
+!models/registered/*/*/model.pkl
 
 # Generated and large data artifacts
 data/raw/*

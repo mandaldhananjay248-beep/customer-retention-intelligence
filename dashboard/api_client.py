@@ -38,8 +38,16 @@ TARGET_COLUMN = "churn_next_30_days"
 def get_api_base_url() -> str:
     """Read fresh on every call (not cached at import time) so tests and
     a running app can both override it via the environment.
+
+    API_BASE_URL wins if set. Otherwise API_HOSTPORT -- a bare `host:port`,
+    which is what Render's Blueprint `fromService` reference provides for
+    the API's private-network address (see render.yaml) -- is used over
+    plain HTTP.
     """
-    return os.environ.get("API_BASE_URL", DEFAULT_API_BASE_URL).rstrip("/")
+    base_url = os.environ.get("API_BASE_URL")
+    if not base_url and os.environ.get("API_HOSTPORT"):
+        base_url = f"http://{os.environ['API_HOSTPORT']}"
+    return (base_url or DEFAULT_API_BASE_URL).rstrip("/")
 
 
 @dataclass

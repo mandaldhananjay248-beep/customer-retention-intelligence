@@ -212,17 +212,17 @@ Browser -> Streamlit container (host port 8501)
           FastAPI container (host port 8000)
               |
               v
-    existing MLflow-registered model / SHAP / recommendation code (unchanged)
+    packaged MLflow registered model / SHAP / recommendation code (unchanged)
 ```
+
+Since Phase 15 both images are self-contained: no host files are mounted, and the same
+images are what CI smoke-tests and Render runs (see [Deployment](#deployment)).
 
 ### 1. Prerequisites
 
 - Docker Desktop (or an equivalent Docker Engine + Compose v2) installed and running.
-- Phases 1-10 already run **locally at least once**, so the following git-ignored,
-  developer-generated artifacts exist on disk (see "Model artifact / runtime
-  requirements" below for why these can't be baked into the images):
-  - `data/processed/customer_features.parquet` (Phase 4)
-  - `mlruns.db` and `mlartifacts/` (Phase 10 MLflow registration)
+- Nothing else: no local data, model, or MLflow state is needed (see "Model artifact /
+  runtime requirements" below).
 
 ### 2. Environment setup
 
@@ -232,9 +232,9 @@ Copy the example environment file if you want to override any defaults:
 cp .env.example .env
 ```
 
-No real secrets are needed for local use -- `.env.example` only documents
-`API_BASE_URL`, and Compose already sets the correct in-network value for the
-dashboard container (see below).
+No secrets are needed anywhere -- `.env.example` only documents optional,
+non-sensitive settings (`API_BASE_URL`, `API_HOSTPORT`, `MODEL_ARTIFACT_ROOT`), and
+Compose already sets the correct in-network value for the dashboard container.
 
 ### 3. Building images
 
@@ -242,8 +242,10 @@ dashboard container (see below).
 docker compose build
 ```
 
-Both `Dockerfile.api` and `Dockerfile.dashboard` install the project's single
-`requirements.txt` and copy the application source (respecting `.dockerignore`).
+Both `Dockerfile.api` and `Dockerfile.dashboard` install the pinned runtime
+`requirements.txt`, copy the application source (respecting `.dockerignore`), and
+regenerate `data/processed/customer_features.parquet` from the seeded pipeline
+(about 30 seconds; see below).
 
 ### 4. Starting the application
 
@@ -264,7 +266,8 @@ docker compose down
 ```
 
 This removes the containers and the Compose network but leaves the built images and
-your local `mlruns.db` / `mlartifacts/` / `data/` untouched.
+your local `mlruns.db` / `mlartifacts/` / `data/` untouched (the containers never
+used them).
 
 ### 6. Viewing logs
 
@@ -281,43 +284,218 @@ docker compose up -d --build
 
 ### 8. Troubleshooting API connectivity
 
-- `GET http://localhost:8000/health` returning `{"status": "unhealthy", ...}` almost
-  always means `data/processed/customer_features.parquet`, `mlruns.db`, or
-  `mlartifacts/` isn't present on the host -- run Phases 1-10 locally first.
+- `GET http://localhost:8000/health` returning `{"status": "unhealthy", ...}` means
+  the model service failed to load -- `docker compose logs api` shows why (for
+  example a packaged-model SHA-256 mismatch).
 - The dashboard's sidebar shows "API Unavailable" if it can't reach the `api`
   service -- check `docker compose logs api` for the actual startup error.
 - Inside the `dashboard` container, `http://localhost:8000` will **not** reach the API
   (that's the dashboard container itself); it must use `http://api:8000`, which is
   exactly what `docker-compose.yml` sets `API_BASE_URL` to.
 
-### 9. Model artifact / runtime requirements -- important limitation
+### 9. Model artifact / runtime requirements
 
-`data/processed/customer_features.parquet`, `mlruns.db`, and `mlartifacts/` are
-git-ignored (see `.gitignore`) and are **not** copied into either image. Instead they
-are mounted read-only (mostly) into the `api`/`dashboard` containers at runtime from
-the host, so a missing artifact fails clearly at container startup (via the existing
-`/health` check) rather than silently baking a stale copy into an image layer.
+Phase 13 bind-mounted `mlruns.db`, `mlartifacts/` and `data/processed/` from the host,
+and had to mount `mlartifacts/` a second time at the developer machine's absolute path,
+because MLflow's SQLite registry records each model's artifact location as an absolute
+host path. Phase 15 removed that dependency entirely:
 
-**A machine-specific quirk discovered while building this phase:** MLflow's local
-SQLite backend (`mlruns.db`) records each registered model's artifact location as an
-**absolute host path** at the moment it was registered (Phase 10) --
-`/Users/dhananjaymandal/customer-retention-intelligence/mlartifacts/...` on this
-machine. `docker-compose.yml` therefore mounts `mlartifacts/` a second time at that
-exact absolute path inside the `api` container (in addition to the normal `/app`
-mount), and mounts it **read-write** because `mlflow.sklearn.load_model` writes a
-small internal bookkeeping file (`registered_model_meta`) when loading an
-already-registered model -- this is MLflow's own housekeeping, not retraining or a
-model behavior change.
-
-Practical effect: this `docker-compose.yml`, as committed, is tied to running on this
-project's current absolute path. Running it from a different clone location or a
-different machine requires either re-registering the model there (`python -m
-src.models.mlflow_tracking`, after Phases 1-10 have produced fresh local artifacts) or
-adjusting the second `mlartifacts` mount target in `docker-compose.yml` to match that
-machine's actual project path.
+- **Model:** the API loads `models/registered/customer-churn-logistic-regression/1/`, a
+  byte-for-byte copy of registry version 1's MLflow model directory (~55 KB), committed
+  to the repo. `src.models.mlflow_tracking.load_packaged_model` loads it with MLflow's
+  own sklearn loader after checking `model.pkl`'s SHA-256 against
+  `configs/mlflow_config.yaml`, and applies the same model-type / `C` / `class_weight`
+  validation as before. `MODEL_ARTIFACT_ROOT` can point it elsewhere. Nothing was
+  retrained: predictions are identical to the Phase 7 artifact on all 136,701 rows.
+- **Data:** `customer_features.parquet` is never committed or downloaded. The image
+  build runs `python -m src.data.regenerate_feature_dataset --prune`, which re-runs the
+  committed seeded Phase 1-4 pipeline and fails the build unless the result matches the
+  content fingerprint of the dataset the model was registered alongside.
+- **Local MLflow registry:** `mlruns.db` / `mlartifacts/` remain a local-only tool for
+  `mlflow ui` and Phase 10 experiments; nothing in the running services reads them.
 
 ## Deployment
-To be implemented.
+
+Phase 15: GitHub, CI/CD and a public deployment on [Render](https://render.com). No AWS
+or other cloud account is involved.
+
+### Production architecture
+
+```
+Browser
+   | HTTPS (public *.onrender.com URL)
+   v
+customer-retention-dashboard   Render web service, Docker, Free instance (512 MB)
+   | HTTP over Render's private network (API_HOSTPORT)
+   v
+customer-retention-api         Render web service, Docker, 1c-2g instance (2 GB) -- paid
+   |                           also public, for /health, /docs and the monitoring endpoints
+   v
+packaged MLflow registered model (v1) -> SHAP explanations -> next-best-action
+   |
+   v
+in-memory request metrics + drift monitoring (Phase 14)
+```
+
+Both services are defined in [`render.yaml`](render.yaml), a Render Blueprint that
+builds the same `Dockerfile.api` / `Dockerfile.dashboard` used locally and in CI.
+
+**Why two services, not one.** The API and dashboard are already separate containers
+with separate health checks. Running both in one container would need a process
+supervisor, would put Streamlit on the paid 2 GB instance, and would mean one crash
+restarts both. Keeping two services preserves the tested Phase 13 architecture. Render
+lets a Free service *send* private-network traffic to a paid one, so the dashboard
+calls the API privately without going through its public URL.
+
+**Why these instance types (measured, Linux containers):**
+
+| Service | Measured memory | Instance type |
+|---|---|---|
+| API | ~730 MiB steady, ~860 MB peak while loading the model, SHAP background and drift baselines | `1c-2g` (1 CPU, 2 GB; paid) -- 512 MB instances would be killed |
+| Dashboard | ~470-500 MB peak for a full session under a hard 512 MB limit | `free` (512 MB) -- tight, see limitations |
+
+Check current prices on Render's [pricing page](https://render.com/pricing) before
+creating the Blueprint. This repo does not create any Render resource itself.
+
+### GitHub and branch strategy
+
+- Repository: https://github.com/mandaldhananjay248-beep/customer-retention-intelligence
+- `main` is the deployed branch. Work on a feature branch and open a pull request; CI
+  runs on the PR, and merging to `main` triggers the deployment once CI passes.
+
+### CI/CD
+
+```
+git push / pull request
+   |
+   v
+GitHub Actions (.github/workflows/ci.yml)
+   |-- tests:  Python 3.14, pip install -r requirements-dev.txt,
+   |           regenerate dataset, provision Phase 7 model path from the packaged model,
+   |           FAIL_ON_SKIPPED_TESTS=1 python -m pytest -q -rs
+   |-- docker: docker compose build, docker compose up --wait,
+   |           scripts/smoke_test.py against both containers
+   v
+all checks green on main
+   |
+   v
+Render auto-deploys both services (render.yaml: autoDeployTrigger: checksPass)
+```
+
+- **No skipped tests in CI.** Several test modules skip themselves when a generated
+  artifact is missing. CI provisions those artifacts from committed sources instead
+  (the seeded data pipeline and the packaged model -- nothing is retrained), and
+  `tests/conftest.py` fails the run if *any* test is skipped while
+  `FAIL_ON_SKIPPED_TESTS=1`. The job summary reports collected / passed / failed /
+  errors / skipped.
+- **No credentials.** CI's token is `contents: read`; it never pushes images or calls
+  Render. Render builds from GitHub through its own GitHub integration.
+
+### Local development
+
+```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt        # runtime deps + pytest + Jupyter
+
+# First time only: generate the dataset (seeded, ~30 s) and provision the Phase 7
+# model path from the packaged model if you haven't run Phases 1-10 locally.
+python -m src.data.regenerate_feature_dataset
+python -m src.models.provision_tuned_model
+
+uvicorn api.main:app --reload              # http://localhost:8000/docs
+streamlit run dashboard/app.py             # http://localhost:8501
+```
+
+Or run both containers with `docker compose up -d --build` (see [Docker](#docker)).
+
+### Testing
+
+```bash
+python -m pytest -q                              # full suite
+FAIL_ON_SKIPPED_TESTS=1 python -m pytest -q -rs  # exactly what CI runs
+
+# End-to-end smoke test of any running deployment (standard library only):
+python scripts/smoke_test.py --api-url http://localhost:8000 --dashboard-url http://localhost:8501
+```
+
+The smoke test checks `/health`, `/model-info`, `/monitoring/health`, a real
+`/customer-analysis` request (its churn probability must equal the packaged model's
+output for the model's own MLflow input example), SHAP drivers, the recommendation,
+the `X-Request-ID` header, that an invalid request is rejected and counted as a failed
+request, that `/monitoring/metrics` counters grow, `/monitoring/drift`, and the
+dashboard's `/_stcore/health`.
+
+### Deploying on Render (first time)
+
+1. Push `main` to GitHub and confirm the CI workflow is green.
+2. Review `render.yaml`: set `region` on **both** services if Render's default
+   (`oregon`) isn't the one you want -- region can't be changed later, and both must
+   match for private networking.
+3. In the Render Dashboard choose **New > Blueprint**, connect the GitHub repository,
+   and select `main`. Render lists the two services and their instance types; the API's
+   `1c-2g` instance is billed.
+4. Wait for both deploys to go live, then run:
+   `python scripts/smoke_test.py --api-url https://<api-service>.onrender.com --dashboard-url https://<dashboard-service>.onrender.com --wait 300`
+
+### Environment variables
+
+| Variable | Service | Value | Secret? |
+|---|---|---|---|
+| `PORT` | API / dashboard | `8000` / `8501`, set in `render.yaml` to match each image's port | No |
+| `API_HOSTPORT` | dashboard | the API's private `host:port`, injected by `render.yaml` (`fromService ... hostport`) | No |
+| `API_BASE_URL` | dashboard | full API URL; overrides `API_HOSTPORT` (Compose sets `http://api:8000`) | No |
+| `MODEL_ARTIFACT_ROOT` | API | optional override for `models/registered/` | No |
+
+The application needs **no secrets**. None are defined in the repo, `render.yaml`,
+Dockerfiles or CI.
+
+### Health checks and endpoints
+
+| Check | Where |
+|---|---|
+| API health (Render health check) | `GET /health` -- 200 only when the model service is loaded |
+| Dashboard health (Render health check) | `GET /_stcore/health` |
+| Model metadata | `GET /model-info` |
+| Monitoring | `GET /monitoring/health`, `GET /monitoring/metrics`, `GET /monitoring/drift` |
+| Interactive API docs | `GET /docs` |
+
+Public URLs: `https://<service-name>.onrender.com`, assigned by Render when the
+Blueprint is created. They will be recorded here once the services exist and have been
+verified.
+
+### Redeploy and rollback
+
+- **Redeploy:** push or merge to `main` (auto-deploys after CI passes), or use
+  **Manual Deploy > Deploy latest commit** on a service in the Render Dashboard.
+- **Rollback:** on a service's **Deploys** page, pick an earlier successful deploy and
+  choose **Rollback > Rollback to this deploy** (only builds Render still retains are
+  available). A Dashboard rollback disables that service's automatic deploys, so revert
+  the bad commit on `main` (`git revert <sha>`, never a force-push) before turning
+  auto-deploy back on. Roll back both services if the bad change touched both.
+- **Stop costs:** suspend or delete `customer-retention-api` in the Render Dashboard.
+
+### Production limitations
+
+- **Cost:** the API needs the paid `1c-2g` instance; nothing about it scales to zero.
+- **Free dashboard spin-down:** the Free dashboard spins down after 15 minutes without
+  traffic and takes about a minute to start again. It is not "always on".
+- **Tight dashboard memory:** a full dashboard session peaked at ~470-500 MB under a
+  hard 512 MB limit in local tests. Render's own overhead or heavy concurrent use could
+  still push it over and restart the service; the fix is a larger instance type.
+- **Ephemeral filesystem:** nothing written at runtime survives a redeploy, restart or
+  spin-down. The app writes nothing it needs, but see the next point.
+- **In-memory monitoring:** `/monitoring/*` counters, latency windows and drift
+  observations live in process memory. They reset on every deploy and restart, and
+  would not be aggregated across multiple instances.
+- **Model/data provenance:** the served model is the committed packaged copy of
+  registry version 1. The dataset is regenerated at build time and fingerprint-checked,
+  so any change to the data pipeline code fails the build until the fingerprint (and,
+  if intended, the model) is deliberately updated.
+- **Public model artifact:** the repository is public, so the packaged model (trained
+  on synthetic data) and its five-row MLflow input example are public too.
+- **No custom domain, auth or rate limiting:** both services are open on
+  `*.onrender.com` with Render-managed HTTPS.
 
 ## Project Structure
 To be implemented.

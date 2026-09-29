@@ -1,0 +1,147 @@
+artifact_path: /Users/dhananjaymandal/customer-retention-intelligence/mlartifacts/models/m-beb0e30f078b44c29e15607c4582514c/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.14.6
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: pickle
+    sklearn_version: 1.9.1
+    skops_trusted_types: null
+is_signature_from_type_hint: false
+mlflow_version: 3.16.1
+model_id: m-beb0e30f078b44c29e15607c4582514c
+model_size_bytes: 42338
+model_uuid: m-beb0e30f078b44c29e15607c4582514c
+prompts: null
+run_id: 476233cecce9442c84e0b4ff3c1d5d54
+saved_input_example_info:
+  artifact_path: input_example.json
+  pandas_orient: split
+  serving_input_path: serving_input_example.json
+  type: dataframe
+signature:
+  inputs: '[{"type": "long", "name": "age", "required": true}, {"type": "long", "name":
+    "tenure_days", "required": true}, {"type": "double", "name": "tenure_months",
+    "required": true}, {"type": "double", "name": "txn_count_30d", "required": true},
+    {"type": "double", "name": "txn_amount_sum_30d", "required": true}, {"type": "double",
+    "name": "txn_amount_mean_30d", "required": false}, {"type": "double", "name":
+    "txn_amount_max_30d", "required": false}, {"type": "double", "name": "txn_success_count_30d",
+    "required": true}, {"type": "double", "name": "txn_failed_count_30d", "required":
+    true}, {"type": "double", "name": "txn_purchase_count_30d", "required": true},
+    {"type": "double", "name": "txn_renewal_count_30d", "required": true}, {"type":
+    "double", "name": "txn_upgrade_count_30d", "required": true}, {"type": "double",
+    "name": "txn_failed_rate_30d", "required": true}, {"type": "double", "name": "txn_count_60d",
+    "required": true}, {"type": "double", "name": "txn_amount_sum_60d", "required":
+    true}, {"type": "double", "name": "txn_amount_mean_60d", "required": false}, {"type":
+    "double", "name": "txn_amount_max_60d", "required": false}, {"type": "double",
+    "name": "txn_success_count_60d", "required": true}, {"type": "double", "name":
+    "txn_failed_count_60d", "required": true}, {"type": "double", "name": "txn_purchase_count_60d",
+    "required": true}, {"type": "double", "name": "txn_renewal_count_60d", "required":
+    true}, {"type": "double", "name": "txn_upgrade_count_60d", "required": true},
+    {"type": "double", "name": "txn_failed_rate_60d", "required": true}, {"type":
+    "double", "name": "txn_count_90d", "required": true}, {"type": "double", "name":
+    "txn_amount_sum_90d", "required": true}, {"type": "double", "name": "txn_amount_mean_90d",
+    "required": false}, {"type": "double", "name": "txn_amount_max_90d", "required":
+    false}, {"type": "double", "name": "txn_success_count_90d", "required": true},
+    {"type": "double", "name": "txn_failed_count_90d", "required": true}, {"type":
+    "double", "name": "txn_purchase_count_90d", "required": true}, {"type": "double",
+    "name": "txn_renewal_count_90d", "required": true}, {"type": "double", "name":
+    "txn_upgrade_count_90d", "required": true}, {"type": "double", "name": "txn_failed_rate_90d",
+    "required": true}, {"type": "double", "name": "txn_count_180d", "required": true},
+    {"type": "double", "name": "txn_amount_sum_180d", "required": true}, {"type":
+    "double", "name": "txn_amount_mean_180d", "required": false}, {"type": "double",
+    "name": "txn_amount_max_180d", "required": false}, {"type": "double", "name":
+    "txn_success_count_180d", "required": true}, {"type": "double", "name": "txn_failed_count_180d",
+    "required": true}, {"type": "double", "name": "txn_purchase_count_180d", "required":
+    true}, {"type": "double", "name": "txn_renewal_count_180d", "required": true},
+    {"type": "double", "name": "txn_upgrade_count_180d", "required": true}, {"type":
+    "double", "name": "txn_failed_rate_180d", "required": true}, {"type": "double",
+    "name": "days_since_last_transaction", "required": false}, {"type": "double",
+    "name": "days_since_last_successful_transaction", "required": false}, {"type":
+    "boolean", "name": "has_any_transaction_history", "required": true}, {"type":
+    "double", "name": "active_days_recent30d", "required": true}, {"type": "double",
+    "name": "avg_login_count_recent30d", "required": true}, {"type": "double", "name":
+    "avg_session_minutes_recent30d", "required": true}, {"type": "double", "name":
+    "avg_feature_usage_count_recent30d", "required": true}, {"type": "double", "name":
+    "avg_pages_viewed_recent30d", "required": true}, {"type": "double", "name": "avg_active_minutes_recent30d",
+    "required": true}, {"type": "double", "name": "usage_missing_rate_recent30d",
+    "required": true}, {"type": "double", "name": "active_days_previous30d", "required":
+    true}, {"type": "double", "name": "avg_login_count_previous30d", "required": false},
+    {"type": "double", "name": "avg_session_minutes_previous30d", "required": false},
+    {"type": "double", "name": "avg_feature_usage_count_previous30d", "required":
+    false}, {"type": "double", "name": "avg_pages_viewed_previous30d", "required":
+    false}, {"type": "double", "name": "avg_active_minutes_previous30d", "required":
+    false}, {"type": "double", "name": "usage_missing_rate_previous30d", "required":
+    false}, {"type": "double", "name": "active_days_90d", "required": true}, {"type":
+    "double", "name": "avg_login_count_90d", "required": true}, {"type": "double",
+    "name": "avg_session_minutes_90d", "required": true}, {"type": "double", "name":
+    "avg_feature_usage_count_90d", "required": true}, {"type": "double", "name": "avg_pages_viewed_90d",
+    "required": true}, {"type": "double", "name": "avg_active_minutes_90d", "required":
+    true}, {"type": "double", "name": "usage_missing_rate_90d", "required": true},
+    {"type": "double", "name": "login_count_change_30d", "required": false}, {"type":
+    "double", "name": "login_count_pct_change_30d", "required": false}, {"type": "double",
+    "name": "session_minutes_change_30d", "required": false}, {"type": "double", "name":
+    "session_minutes_pct_change_30d", "required": false}, {"type": "double", "name":
+    "feature_usage_count_change_30d", "required": false}, {"type": "double", "name":
+    "feature_usage_count_pct_change_30d", "required": false}, {"type": "double", "name":
+    "active_minutes_change_30d", "required": false}, {"type": "double", "name": "active_minutes_pct_change_30d",
+    "required": false}, {"type": "double", "name": "days_since_last_usage", "required":
+    true}, {"type": "boolean", "name": "has_any_usage_history", "required": true},
+    {"type": "double", "name": "ticket_count_30d", "required": true}, {"type": "double",
+    "name": "pending_ticket_count_30d", "required": true}, {"type": "double", "name":
+    "resolved_ticket_count_30d", "required": true}, {"type": "double", "name": "closed_ticket_count_30d",
+    "required": true}, {"type": "double", "name": "high_critical_ticket_count_30d",
+    "required": true}, {"type": "double", "name": "avg_satisfaction_30d", "required":
+    false}, {"type": "double", "name": "min_satisfaction_30d", "required": false},
+    {"type": "double", "name": "avg_resolution_hours_30d", "required": false}, {"type":
+    "double", "name": "max_resolution_hours_30d", "required": false}, {"type": "double",
+    "name": "category_account_count_30d", "required": true}, {"type": "double", "name":
+    "category_billing_count_30d", "required": true}, {"type": "double", "name": "category_feature_request_count_30d",
+    "required": true}, {"type": "double", "name": "category_login_count_30d", "required":
+    true}, {"type": "double", "name": "category_other_count_30d", "required": true},
+    {"type": "double", "name": "category_performance_count_30d", "required": true},
+    {"type": "double", "name": "category_technical_count_30d", "required": true},
+    {"type": "double", "name": "ticket_count_90d", "required": true}, {"type": "double",
+    "name": "pending_ticket_count_90d", "required": true}, {"type": "double", "name":
+    "resolved_ticket_count_90d", "required": true}, {"type": "double", "name": "closed_ticket_count_90d",
+    "required": true}, {"type": "double", "name": "high_critical_ticket_count_90d",
+    "required": true}, {"type": "double", "name": "avg_satisfaction_90d", "required":
+    false}, {"type": "double", "name": "min_satisfaction_90d", "required": false},
+    {"type": "double", "name": "avg_resolution_hours_90d", "required": false}, {"type":
+    "double", "name": "max_resolution_hours_90d", "required": false}, {"type": "double",
+    "name": "category_account_count_90d", "required": true}, {"type": "double", "name":
+    "category_billing_count_90d", "required": true}, {"type": "double", "name": "category_feature_request_count_90d",
+    "required": true}, {"type": "double", "name": "category_login_count_90d", "required":
+    true}, {"type": "double", "name": "category_other_count_90d", "required": true},
+    {"type": "double", "name": "category_performance_count_90d", "required": true},
+    {"type": "double", "name": "category_technical_count_90d", "required": true},
+    {"type": "double", "name": "ticket_count_180d", "required": true}, {"type": "double",
+    "name": "pending_ticket_count_180d", "required": true}, {"type": "double", "name":
+    "resolved_ticket_count_180d", "required": true}, {"type": "double", "name": "closed_ticket_count_180d",
+    "required": true}, {"type": "double", "name": "high_critical_ticket_count_180d",
+    "required": true}, {"type": "double", "name": "avg_satisfaction_180d", "required":
+    false}, {"type": "double", "name": "min_satisfaction_180d", "required": false},
+    {"type": "double", "name": "avg_resolution_hours_180d", "required": false}, {"type":
+    "double", "name": "max_resolution_hours_180d", "required": false}, {"type": "double",
+    "name": "category_account_count_180d", "required": true}, {"type": "double", "name":
+    "category_billing_count_180d", "required": true}, {"type": "double", "name": "category_feature_request_count_180d",
+    "required": true}, {"type": "double", "name": "category_login_count_180d", "required":
+    true}, {"type": "double", "name": "category_other_count_180d", "required": true},
+    {"type": "double", "name": "category_performance_count_180d", "required": true},
+    {"type": "double", "name": "category_technical_count_180d", "required": true},
+    {"type": "double", "name": "days_since_last_ticket", "required": false}, {"type":
+    "boolean", "name": "has_any_support_history", "required": true}, {"type": "string",
+    "name": "country", "required": true}, {"type": "string", "name": "plan", "required":
+    true}, {"type": "string", "name": "contract_type", "required": true}, {"type":
+    "string", "name": "acquisition_channel", "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float64", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-09-23 06:07:36.241464'

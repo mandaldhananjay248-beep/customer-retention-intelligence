@@ -1,20 +1,23 @@
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-xgboost
-lightgbm
-catboost
-shap
-pyyaml
+# Runtime dependencies for the API and dashboard images, pinned to the
+# versions the project (and its packaged model, see MLmodel's
+# sklearn_version) was built and tested with. Development-only tools
+# (pytest, Jupyter) live in requirements-dev.txt.
+pandas==3.0.5
+numpy==2.5.3
+pyarrow==25.0.1
+matplotlib==3.11.2
+seaborn==0.13.2
+scikit-learn==1.9.1
+xgboost==3.4.1
+lightgbm==4.7.0
+catboost==1.2.10
+shap==0.52.0
+pyyaml==6.0.3
 mlflow==3.16.1
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
 pydantic==2.13.5
-httpx
-requests
+httpx==0.28.1
+requests==2.34.2
 streamlit==1.64.0
-plotly
-jupyter
-ipykernel
+plotly==7.1.0

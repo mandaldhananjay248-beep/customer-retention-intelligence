@@ -35,4 +35,21 @@ expected_model:
   C: 0.01
   class_weight: "balanced"
 
+# Phase 15: the exact Phase 10 registered model version, packaged as a
+# plain MLflow model directory committed to the repo, so the API can load
+# it on any machine (CI, Docker, Render) without the local, machine-specific
+# mlruns.db / mlartifacts registry state -- whose recorded artifact
+# location is an absolute developer-machine path. The files are
+# byte-for-byte copies of registry version 1's artifacts; nothing was
+# retrained or re-serialized. `path` is resolved against the
+# MODEL_ARTIFACT_ROOT environment variable if set, otherwise against
+# models/registered/ in the project root. load_packaged_model() refuses to
+# unpickle model.pkl unless its SHA-256 matches `model_sha256`.
+packaged_model:
+  path: "customer-churn-logistic-regression/1"
+  version: "1"
+  model_id: "m-beb0e30f078b44c29e15607c4582514c"
+  run_id: "476233cecce9442c84e0b4ff3c1d5d54"
+  model_sha256: "d4a3975471dcd8a4e35075bb94c2ec8c6f19a2bb3629da6fd0ac688039881da2"
+
 random_seed: 42
