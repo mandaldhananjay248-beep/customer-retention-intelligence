@@ -2,10 +2,9 @@
 #
 # Runs the existing dashboard/app.py unchanged. This container never
 # loads the ML model, computes SHAP values, or evaluates recommendation
-# rules itself -- it only talks HTTP to the API via dashboard/api_client.py:
-#   - Docker Compose: API_BASE_URL=http://api:8000 (compose service name)
-#   - Render: API_HOSTPORT = the API's private-network host:port
-#     (render.yaml fromService reference)
+# rules itself -- it only talks HTTP to the API via dashboard/api_client.py
+# (Docker Compose sets API_BASE_URL=http://api:8000, the compose service
+# name).
 #
 # data/processed/customer_features.parquet -- used only to populate the
 # customer/snapshot selection dropdowns and to build API request payloads,
@@ -40,7 +39,6 @@ RUN groupadd --system app && useradd --system --gid app --home /app app \
     && chown -R app:app /app
 USER app
 
-# Render routes to this port via the PORT env var set in render.yaml.
 EXPOSE 8501
 
 # Streamlit's own built-in health endpoint (a pre-existing Streamlit

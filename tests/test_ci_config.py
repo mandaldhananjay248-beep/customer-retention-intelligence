@@ -85,6 +85,18 @@ def test_ci_runs_the_full_suite_with_skips_failing_the_run(workflow: dict) -> No
     assert step["env"]["FAIL_ON_SKIPPED_TESTS"] == "1"
 
 
+def test_ci_checks_the_streamlit_cloud_entry_point_like_community_cloud(workflow: dict) -> None:
+    """Runtime requirements only (no dev tools, no provisioned data), then the
+    real streamlit_app.py end to end.
+    """
+    commands = _run_commands(workflow, "streamlit-cloud")
+    assert "pip install -r requirements.txt" in commands
+    assert not any("requirements-dev.txt" in c or "regenerate_feature_dataset" in c for c in commands)
+    assert "python scripts/check_streamlit_app.py" in commands
+    setup = next(s for s in _steps(workflow, "streamlit-cloud") if s.get("uses", "").startswith("actions/setup-python"))
+    assert setup["with"]["python-version"] == "3.14"
+
+
 def test_ci_builds_both_images_and_smoke_tests_them(workflow: dict) -> None:
     commands = "\n".join(_run_commands(workflow, "docker"))
     assert "docker compose build" in commands

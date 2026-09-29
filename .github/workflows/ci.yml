@@ -1,7 +1,7 @@
 # Phase 15 CI: the full test suite and a real Docker build + smoke test on
-# every push to main and every pull request. Render deploys a commit on
-# main only after these checks pass (render.yaml: autoDeployTrigger:
-# checksPass). No cloud credentials are used or needed.
+# every push to main and every pull request. Streamlit Community Cloud
+# redeploys from main on its own; keep main green by merging only after these
+# checks pass. No cloud credentials are used or needed.
 
 name: CI
 
@@ -72,6 +72,27 @@ jobs:
         with:
           name: pytest-results
           path: pytest-results.xml
+
+  streamlit-cloud:
+    name: Streamlit Cloud entry point
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Mirrors Streamlit Community Cloud: runtime requirements only, no
+      # pre-generated data -- streamlit_app.py regenerates it on first run.
+      - name: Install runtime dependencies only
+        run: pip install -r requirements.txt
+
+      - name: Run streamlit_app.py end to end
+        run: python scripts/check_streamlit_app.py
 
   docker:
     name: Docker build + smoke test

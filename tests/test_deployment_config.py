@@ -1,7 +1,7 @@
-"""Tests for Phase 15's deployment configuration: render.yaml, the
-self-contained Docker images, pinned dependencies, and the absence of any
-developer-machine path from the production code path. Static checks only
--- nothing here calls Render or any cloud service.
+"""Tests for Phase 15's deployment configuration: Streamlit Community
+Cloud readiness, the self-contained Docker images, pinned dependencies, and
+the absence of any developer-machine path from the production code path.
+Static checks only -- nothing here calls any cloud service.
 """
 
 from __future__ import annotations
@@ -14,11 +14,6 @@ import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RENDER_PATH = PROJECT_ROOT / "render.yaml"
-REPO_URL = "https://github.com/mandaldhananjay248-beep/customer-retention-intelligence"
-API_SERVICE = "customer-retention-api"
-DASHBOARD_SERVICE = "customer-retention-dashboard"
-
 # Everything that ends up in, or configures, the running services.
 PRODUCTION_PATHS = [
     "api",
@@ -28,101 +23,48 @@ PRODUCTION_PATHS = [
     "Dockerfile.api",
     "Dockerfile.dashboard",
     "docker-compose.yml",
-    "render.yaml",
+    "streamlit_app.py",
     ".github",
     "requirements.txt",
     ".env.example",
 ]
 
 
-@pytest.fixture(scope="module")
-def render() -> dict:
-    assert RENDER_PATH.exists(), "render.yaml is missing"
-    return yaml.safe_load(RENDER_PATH.read_text())
-
-
-@pytest.fixture(scope="module")
-def services(render: dict) -> dict[str, dict]:
-    return {service["name"]: service for service in render["services"]}
-
-
-def _env(service: dict) -> dict[str, dict]:
-    return {var["key"]: var for var in service.get("envVars", [])}
-
-
-def _exposed_port(dockerfile: str) -> str:
-    return re.search(r"^EXPOSE (\d+)$", (PROJECT_ROOT / dockerfile).read_text(), re.MULTILINE).group(1)
-
-
 # ---------------------------------------------------------------------------
-# render.yaml
+# Streamlit Community Cloud
 # ---------------------------------------------------------------------------
 
-def test_render_defines_exactly_the_api_and_dashboard_web_services(render: dict, services: dict) -> None:
-    assert set(render) == {"services"}
-    assert set(services) == {API_SERVICE, DASHBOARD_SERVICE}
-    for service in services.values():
-        assert service["type"] == "web"
-        assert service["runtime"] == "docker"
-
-
-def test_render_services_deploy_from_main_of_this_repo_after_ci_passes(services: dict) -> None:
-    for service in services.values():
-        assert service["repo"] == REPO_URL
-        assert service["branch"] == "main"
-        assert service["autoDeployTrigger"] == "checksPass"
-
-
-@pytest.mark.parametrize(("name", "dockerfile"), [(API_SERVICE, "Dockerfile.api"), (DASHBOARD_SERVICE, "Dockerfile.dashboard")])
-def test_render_services_build_the_existing_dockerfiles(services: dict, name: str, dockerfile: str) -> None:
-    service = services[name]
-    assert service["dockerfilePath"] == f"./{dockerfile}"
-    assert service["dockerContext"] == "."
-    assert (PROJECT_ROOT / dockerfile).exists()
-
-
-@pytest.mark.parametrize(("name", "dockerfile"), [(API_SERVICE, "Dockerfile.api"), (DASHBOARD_SERVICE, "Dockerfile.dashboard")])
-def test_render_port_matches_the_port_the_image_serves(services: dict, name: str, dockerfile: str) -> None:
-    assert _env(services[name])["PORT"]["value"] == _exposed_port(dockerfile)
-
-
-def test_render_health_checks_use_the_existing_endpoints(services: dict) -> None:
-    assert services[API_SERVICE]["healthCheckPath"] == "/health"
-    assert services[DASHBOARD_SERVICE]["healthCheckPath"] == "/_stcore/health"
-
-
-def test_render_plans_match_measured_memory_needs(services: dict) -> None:
-    """The API peaks at ~860 MB while loading (above 512 MB instances); the
-    dashboard stays on the Free plan.
+def test_streamlit_cloud_entrypoint_is_at_the_repo_root() -> None:
+    """Community Cloud's default entrypoint name; it looks for the dependency
+    file next to the entrypoint first, then at the repo root.
     """
-    assert services[API_SERVICE]["plan"] == "1c-2g"
-    assert services[DASHBOARD_SERVICE]["plan"] == "free"
+    assert (PROJECT_ROOT / "streamlit_app.py").is_file()
+    assert (PROJECT_ROOT / "requirements.txt").is_file()
 
 
-def test_render_services_share_one_region_for_private_networking(services: dict) -> None:
-    assert services[API_SERVICE]["region"] == services[DASHBOARD_SERVICE]["region"]
-
-
-def test_render_dashboard_reaches_the_api_over_the_private_network(services: dict) -> None:
-    env = _env(services[DASHBOARD_SERVICE])
-    assert env["API_HOSTPORT"]["fromService"] == {"type": "web", "name": API_SERVICE, "property": "hostport"}
-    assert "API_BASE_URL" not in env
-
-
-def test_render_yaml_sets_only_non_secret_configuration(services: dict) -> None:
-    """The app needs no secrets: the only variables are the port pins and
-    the API's private address -- nothing with an inline credential value.
+def test_no_competing_dependency_file_overrides_requirements_txt() -> None:
+    """Community Cloud uses the first of uv.lock, Pipfile, environment.yml,
+    requirements.txt, pyproject.toml it finds -- only requirements.txt may exist.
     """
-    assert set(_env(services[API_SERVICE])) == {"PORT"}
-    assert set(_env(services[DASHBOARD_SERVICE])) == {"PORT", "API_HOSTPORT"}
-    text = RENDER_PATH.read_text()
-    assert "-----BEGIN" not in text
-    assert not re.search(r"AKIA[0-9A-Z]{16}|rnd_[A-Za-z0-9]{20,}|gh[opsu]_[A-Za-z0-9]{20,}", text)
+    for name in ("uv.lock", "Pipfile", "environment.yml", "environment.yaml", "pyproject.toml"):
+        assert not (PROJECT_ROOT / name).exists(), name
 
 
-def test_render_yaml_never_points_a_service_at_localhost(render: dict) -> None:
-    values = yaml.safe_dump(render)  # parsed configuration only, not comments
-    assert "localhost" not in values and "127.0.0.1" not in values
+def test_streamlit_cloud_needs_no_secrets_or_system_packages() -> None:
+    assert not (PROJECT_ROOT / ".streamlit" / "secrets.toml").exists()
+    assert not (PROJECT_ROOT / "packages.txt").exists()
+
+
+def test_no_render_deployment_configuration_remains() -> None:
+    assert not (PROJECT_ROOT / "render.yaml").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    for path in tracked:
+        if path.endswith((".py", ".yml", ".yaml", ".toml", ".txt", ".example")) and path != "tests/test_deployment_config.py":
+            text = (PROJECT_ROOT / path).read_text(errors="ignore")
+            assert "onrender.com" not in text and "API_HOSTPORT" not in text, path
 
 
 # ---------------------------------------------------------------------------

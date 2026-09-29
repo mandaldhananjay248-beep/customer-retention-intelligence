@@ -11,6 +11,11 @@ for inference, explanations, and recommendations.
 The API base URL comes from the `API_BASE_URL` environment variable
 (default `http://localhost:8000`) -- never hard-coded to a production
 address.
+
+With DASHBOARD_API_MODE=inprocess (set by the Streamlit Community Cloud
+entry point, streamlit_app.py), the same requests are sent to the same
+FastAPI app running inside this process (api/inprocess.py) instead of over
+HTTP -- still FastAPI deciding every response, just without a network hop.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ import requests
 
 DEFAULT_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 10.0
+API_MODE_ENV_VAR = "DASHBOARD_API_MODE"
+INPROCESS_API_MODE = "inprocess"
 
 # The one column in customer_features.parquet that is a label, not a
 # model feature (src.models.baseline.TARGET_COLUMN). Every other column
@@ -38,16 +45,15 @@ TARGET_COLUMN = "churn_next_30_days"
 def get_api_base_url() -> str:
     """Read fresh on every call (not cached at import time) so tests and
     a running app can both override it via the environment.
-
-    API_BASE_URL wins if set. Otherwise API_HOSTPORT -- a bare `host:port`,
-    which is what Render's Blueprint `fromService` reference provides for
-    the API's private-network address (see render.yaml) -- is used over
-    plain HTTP.
     """
-    base_url = os.environ.get("API_BASE_URL")
-    if not base_url and os.environ.get("API_HOSTPORT"):
-        base_url = f"http://{os.environ['API_HOSTPORT']}"
-    return (base_url or DEFAULT_API_BASE_URL).rstrip("/")
+    return os.environ.get("API_BASE_URL", DEFAULT_API_BASE_URL).rstrip("/")
+
+
+def is_inprocess_mode() -> bool:
+    """True when requests go to the in-process FastAPI app (see module
+    docstring). Read fresh on every call, like get_api_base_url.
+    """
+    return os.environ.get(API_MODE_ENV_VAR, "").strip().lower() == INPROCESS_API_MODE
 
 
 @dataclass
@@ -86,6 +92,16 @@ def _format_error_detail(detail: Any) -> str | None:
 def _request(
     method: str, path: str, json_body: dict | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS
 ) -> APIResult:
+    if is_inprocess_mode():
+        # Imported lazily: only this mode loads the model into this process.
+        from api import inprocess
+
+        try:
+            response = inprocess.request(method, path, json_body)
+        except Exception as exc:  # noqa: BLE001 -- surfaced as a labeled failure, like a network error
+            return APIResult(ok=False, error=f"The in-process API failed to handle the request ({type(exc).__name__}).")
+        return _parse_response(response)
+
     url = f"{get_api_base_url()}{path}"
 
     try:
@@ -105,6 +121,13 @@ def _request(
     except requests.exceptions.RequestException:
         return APIResult(ok=False, error="An unexpected network error occurred while contacting the API.")
 
+    return _parse_response(response)
+
+
+def _parse_response(response) -> APIResult:
+    """Turn an HTTP response (a `requests` response, or the in-process
+    client's equivalent) into an APIResult.
+    """
     try:
         body = response.json()
     except ValueError:

@@ -16,7 +16,7 @@
 # No host bind mounts are needed, so the Phase 13 mounts of mlruns.db,
 # mlartifacts/ (including its developer-machine absolute path) and
 # data/processed/ are gone, and this file works from any checkout location.
-# The same images are what Render builds from render.yaml.
+# CI builds and smoke-tests these same images.
 
 services:
   api:

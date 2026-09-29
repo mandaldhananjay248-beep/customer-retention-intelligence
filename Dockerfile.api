@@ -7,7 +7,7 @@
 #
 # Phase 15 makes the image self-contained and portable (no host bind
 # mounts, no developer-machine paths), so the same image runs under Docker
-# Compose, in CI, and on Render:
+# Compose and in CI:
 #   - Model: the committed packaged copy of registry version 1
 #     (models/registered/, SHA-256 verified at load). The local mlruns.db /
 #     mlartifacts registry is not needed and stays excluded.
@@ -42,7 +42,6 @@ RUN groupadd --system app && useradd --system --gid app --home /app app \
     && chown -R app:app /app
 USER app
 
-# Render routes to this port via the PORT env var set in render.yaml.
 EXPOSE 8000
 
 # Uses the API's own existing GET /health endpoint -- no second health

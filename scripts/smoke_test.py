@@ -1,5 +1,5 @@
-"""Phase 15: end-to-end smoke test for a running deployment -- Docker
-Compose locally, the CI Docker job, or the live Render services.
+"""Phase 15: end-to-end smoke test for a running API/dashboard deployment
+-- Docker Compose locally or the CI Docker job.
 
     python scripts/smoke_test.py --api-url http://localhost:8000 \
         [--dashboard-url http://localhost:8501] [--wait 300]
@@ -60,7 +60,7 @@ def check(condition: bool, message: str) -> None:
 
 
 def wait_until_healthy(url: str, wait_seconds: float) -> None:
-    """Free/cold Render services take a while to spin up -- poll first."""
+    """Cold containers take a while to load the model -- poll first."""
     deadline = time.monotonic() + wait_seconds
     while True:
         try:

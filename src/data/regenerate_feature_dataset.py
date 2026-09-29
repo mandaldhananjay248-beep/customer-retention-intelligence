@@ -10,7 +10,9 @@ Runs exactly the existing Phase 1-4 code, in order:
 and then verifies the result against FEATURE_DATASET_FINGERPRINT, the
 content hash of the dataset the packaged Phase 10 model was registered
 alongside. Only data is regenerated here -- nothing is fitted, tuned, or
-retrained. Used by both Dockerfiles at image build time and by CI.
+retrained. Used by both Dockerfiles at image build time, by CI, and by the
+Streamlit Community Cloud entry point (streamlit_app.py, via
+ensure_feature_dataset) on first start.
 
     python -m src.data.regenerate_feature_dataset [--prune]
 
@@ -23,12 +25,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FEATURE_DATASET_PATH = PROJECT_ROOT / "data" / "processed" / "customer_features.parquet"
 
 # SHA-256 over pandas' per-row content hashes (index excluded) of the
 # 136,701 x 134 customer_features.parquet produced by Phases 1-4 with
@@ -76,6 +80,23 @@ def regenerate(prune: bool = False) -> Path:
 
     print(f"Regenerated {output_path.relative_to(PROJECT_ROOT)}: shape {features.shape}, fingerprint verified.")
     return output_path
+
+
+def ensure_feature_dataset(path: Path = FEATURE_DATASET_PATH) -> Path:
+    """Regenerate (fingerprint verified) only if the dataset is missing --
+    e.g. on a fresh Streamlit Community Cloud checkout, which has no build
+    step. An existing file is used as-is, exactly as the API and dashboard
+    already do. Never prunes, so a developer's local data/raw files are
+    never deleted.
+
+    Runs in a child process: generation peaks at ~1.2 GB, and memory freed
+    inside a long-lived process isn't reliably returned to the OS, so running
+    it in-process would stack on top of the app's own ~1.1 GB (measured).
+    """
+    if path.exists():
+        return path
+    subprocess.run([sys.executable, "-m", "src.data.regenerate_feature_dataset"], cwd=PROJECT_ROOT, check=True)
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:

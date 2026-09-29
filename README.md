@@ -216,7 +216,7 @@ Browser -> Streamlit container (host port 8501)
 ```
 
 Since Phase 15 both images are self-contained: no host files are mounted, and the same
-images are what CI smoke-tests and Render runs (see [Deployment](#deployment)).
+images are what CI smoke-tests (see [Deployment](#deployment)).
 
 ### 1. Prerequisites
 
@@ -233,7 +233,7 @@ cp .env.example .env
 ```
 
 No secrets are needed anywhere -- `.env.example` only documents optional,
-non-sensitive settings (`API_BASE_URL`, `API_HOSTPORT`, `MODEL_ARTIFACT_ROOT`), and
+non-sensitive settings (`API_BASE_URL`, `DASHBOARD_API_MODE`, `MODEL_ARTIFACT_ROOT`), and
 Compose already sets the correct in-network value for the dashboard container.
 
 ### 3. Building images
@@ -316,80 +316,88 @@ host path. Phase 15 removed that dependency entirely:
 
 ## Deployment
 
-Phase 15: GitHub, CI/CD and a public deployment on [Render](https://render.com). No AWS
-or other cloud account is involved.
+Phase 15: GitHub, CI and a free public deployment of the dashboard on
+[Streamlit Community Cloud](https://streamlit.io/cloud). No AWS or other paid
+cloud service is used, and the app needs no secrets.
 
-### Production architecture
+### Two ways to run the same application
 
 ```
-Browser
-   | HTTPS (public *.onrender.com URL)
-   v
-customer-retention-dashboard   Render web service, Docker, Free instance (512 MB)
-   | HTTP over Render's private network (API_HOSTPORT)
-   v
-customer-retention-api         Render web service, Docker, 1c-2g instance (2 GB) -- paid
-   |                           also public, for /health, /docs and the monitoring endpoints
-   v
-packaged MLflow registered model (v1) -> SHAP explanations -> next-best-action
-   |
-   v
-in-memory request metrics + drift monitoring (Phase 14)
+Docker / local (unchanged)                    Streamlit Community Cloud (public)
+
+Browser                                       Browser
+  |                                             | HTTPS (*.streamlit.app)
+  v                                             v
+Streamlit (dashboard/app.py)                  Streamlit (streamlit_app.py -> dashboard/app.py)
+  | HTTP (API_BASE_URL)                         | same requests, in-process (DASHBOARD_API_MODE=inprocess)
+  v                                             v
+FastAPI (api.main:app, separate process)      FastAPI (api.main:app, same process, api/inprocess.py)
+  |                                             |
+  v                                             v
+packaged MLflow model v1 -> SHAP -> next-best-action -> Phase 14 monitoring (identical code)
 ```
 
-Both services are defined in [`render.yaml`](render.yaml), a Render Blueprint that
-builds the same `Dockerfile.api` / `Dockerfile.dashboard` used locally and in CI.
+- **Docker / local:** two processes (or containers) talking HTTP, exactly as in Phases 11-13.
+- **Community Cloud:** hosts one Streamlit process, so `streamlit_app.py` sets
+  `DASHBOARD_API_MODE=inprocess`. `dashboard/api_client.py` then sends each of its usual
+  requests (`/health`, `/model-info`, `/customer-analysis`, `/monitoring/*`) to the same
+  FastAPI `app` through Starlette's in-memory ASGI client instead of over the network.
+  Every response still comes from the existing routes, request validation, model service,
+  SHAP and recommendation code, and monitoring middleware -- nothing is reimplemented.
+  The FastAPI app's startup (loading the SHA-256-verified packaged model) runs once per
+  process.
+- **Parity is tested, not assumed:** `tests/test_streamlit_cloud.py` checks that the
+  in-process path returns *exactly* the same churn probability, SHAP drivers and
+  recommendation as an independently loaded model service and the packaged model itself,
+  for C000001 and rows spread across the dataset.
+- **Data on Community Cloud:** there is no build step, so on first start
+  `streamlit_app.py` regenerates `data/processed/customer_features.parquet` from the
+  committed seeded pipeline (~30-60 s, in a child process, fingerprint-verified). The
+  dataset is never committed.
 
-**Why two services, not one.** The API and dashboard are already separate containers
-with separate health checks. Running both in one container would need a process
-supervisor, would put Streamlit on the paid 2 GB instance, and would mean one crash
-restarts both. Keeping two services preserves the tested Phase 13 architecture. Render
-lets a Free service *send* private-network traffic to a paid one, so the dashboard
-calls the API privately without going through its public URL.
+### Deploying on Streamlit Community Cloud
 
-**Why these instance types (measured, Linux containers):**
+1. Open https://share.streamlit.io and sign in with GitHub (authorize Streamlit to read
+   the repository).
+2. Choose **Create app**, then deploy from a GitHub repository.
+3. **Repository:** `mandaldhananjay248-beep/customer-retention-intelligence`
+4. **Branch:** `main`
+5. **Main file path:** `streamlit_app.py`
+6. Optionally pick an app URL (subdomain).
+7. Open **Advanced settings** and set **Python version** to **3.14**. This is required:
+   the model was pickled with scikit-learn 1.9.1 on Python 3.14, and the pinned
+   `requirements.txt` targets it. Community Cloud defaults to 3.12, and the version can
+   only be changed later by deleting and redeploying the app. Leave **Secrets** empty --
+   none are needed.
+8. Click **Deploy**. Community Cloud installs `requirements.txt` from the repository root.
+   The first page load then regenerates the dataset and loads the model, so expect about
+   a minute before the dashboard appears.
 
-| Service | Measured memory | Instance type |
-|---|---|---|
-| API | ~730 MiB steady, ~860 MB peak while loading the model, SHAP background and drift baselines | `1c-2g` (1 CPU, 2 GB; paid) -- 512 MB instances would be killed |
-| Dashboard | ~470-500 MB peak for a full session under a hard 512 MB limit | `free` (512 MB) -- tight, see limitations |
-
-Check current prices on Render's [pricing page](https://render.com/pricing) before
-creating the Blueprint. This repo does not create any Render resource itself.
+Use `streamlit_app.py`, not `dashboard/app.py`, as the main file: `dashboard/app.py` on its
+own expects a separately running FastAPI service (`API_BASE_URL`) and would show
+"API Unavailable" on Community Cloud.
 
 ### GitHub and branch strategy
 
 - Repository: https://github.com/mandaldhananjay248-beep/customer-retention-intelligence
 - `main` is the deployed branch. Work on a feature branch and open a pull request; CI
-  runs on the PR, and merging to `main` triggers the deployment once CI passes.
+  runs on the PR. Community Cloud redeploys automatically when `main` changes, whether or
+  not CI passed, so merge to `main` only after CI is green.
 
-### CI/CD
+### CI
 
-```
-git push / pull request
-   |
-   v
-GitHub Actions (.github/workflows/ci.yml)
-   |-- tests:  Python 3.14, pip install -r requirements-dev.txt,
-   |           regenerate dataset, provision Phase 7 model path from the packaged model,
-   |           FAIL_ON_SKIPPED_TESTS=1 python -m pytest -q -rs
-   |-- docker: docker compose build, docker compose up --wait,
-   |           scripts/smoke_test.py against both containers
-   v
-all checks green on main
-   |
-   v
-Render auto-deploys both services (render.yaml: autoDeployTrigger: checksPass)
-```
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, with a
+read-only token and no credentials:
 
-- **No skipped tests in CI.** Several test modules skip themselves when a generated
-  artifact is missing. CI provisions those artifacts from committed sources instead
-  (the seeded data pipeline and the packaged model -- nothing is retrained), and
-  `tests/conftest.py` fails the run if *any* test is skipped while
-  `FAIL_ON_SKIPPED_TESTS=1`. The job summary reports collected / passed / failed /
-  errors / skipped.
-- **No credentials.** CI's token is `contents: read`; it never pushes images or calls
-  Render. Render builds from GitHub through its own GitHub integration.
+| Job | What it proves |
+|---|---|
+| Tests (Python 3.14) | `pip install -r requirements-dev.txt`, regenerate the dataset, provision the Phase 7 model path from the packaged model, then `FAIL_ON_SKIPPED_TESTS=1 python -m pytest -q -rs`. Any skipped test fails the run; the job summary reports collected / passed / failed / errors / skipped. |
+| Streamlit Cloud entry point | Mirrors Community Cloud: runtime `requirements.txt` only, no pre-generated data, then `python scripts/check_streamlit_app.py` runs `streamlit_app.py` end to end (all four tabs, C000001 analysis = 63.3%, recommendation, monitoring). |
+| Docker build + smoke test | `docker compose build`, `docker compose up --wait`, `scripts/smoke_test.py` against the API and dashboard containers, and a dashboard-to-API check over the Compose network. |
+
+Several test modules skip themselves locally when a generated artifact is missing. CI
+provisions those artifacts from committed sources instead (the seeded data pipeline and
+the packaged model -- nothing is retrained), which is why no test may skip there.
 
 ### Local development
 
@@ -403,8 +411,12 @@ pip install -r requirements-dev.txt        # runtime deps + pytest + Jupyter
 python -m src.data.regenerate_feature_dataset
 python -m src.models.provision_tuned_model
 
+# Two-process (HTTP) mode, as in Docker:
 uvicorn api.main:app --reload              # http://localhost:8000/docs
 streamlit run dashboard/app.py             # http://localhost:8501
+
+# Single-process mode, exactly as Community Cloud runs it:
+streamlit run streamlit_app.py
 ```
 
 Or run both containers with `docker compose up -d --build` (see [Docker](#docker)).
@@ -414,8 +426,9 @@ Or run both containers with `docker compose up -d --build` (see [Docker](#docker
 ```bash
 python -m pytest -q                              # full suite
 FAIL_ON_SKIPPED_TESTS=1 python -m pytest -q -rs  # exactly what CI runs
+python scripts/check_streamlit_app.py            # Community Cloud entry point, end to end
 
-# End-to-end smoke test of any running deployment (standard library only):
+# End-to-end smoke test of a running API/dashboard (standard library only):
 python scripts/smoke_test.py --api-url http://localhost:8000 --dashboard-url http://localhost:8501
 ```
 
@@ -426,76 +439,61 @@ the `X-Request-ID` header, that an invalid request is rejected and counted as a 
 request, that `/monitoring/metrics` counters grow, `/monitoring/drift`, and the
 dashboard's `/_stcore/health`.
 
-### Deploying on Render (first time)
-
-1. Push `main` to GitHub and confirm the CI workflow is green.
-2. Review `render.yaml`: set `region` on **both** services if Render's default
-   (`oregon`) isn't the one you want -- region can't be changed later, and both must
-   match for private networking.
-3. In the Render Dashboard choose **New > Blueprint**, connect the GitHub repository,
-   and select `main`. Render lists the two services and their instance types; the API's
-   `1c-2g` instance is billed.
-4. Wait for both deploys to go live, then run:
-   `python scripts/smoke_test.py --api-url https://<api-service>.onrender.com --dashboard-url https://<dashboard-service>.onrender.com --wait 300`
-
 ### Environment variables
 
-| Variable | Service | Value | Secret? |
+| Variable | Used by | Value | Secret? |
 |---|---|---|---|
-| `PORT` | API / dashboard | `8000` / `8501`, set in `render.yaml` to match each image's port | No |
-| `API_HOSTPORT` | dashboard | the API's private `host:port`, injected by `render.yaml` (`fromService ... hostport`) | No |
-| `API_BASE_URL` | dashboard | full API URL; overrides `API_HOSTPORT` (Compose sets `http://api:8000`) | No |
+| `DASHBOARD_API_MODE` | dashboard | `inprocess` to call the FastAPI app in the same process; set automatically by `streamlit_app.py`, unset for Docker/local HTTP | No |
+| `API_BASE_URL` | dashboard (HTTP mode) | FastAPI base URL, default `http://localhost:8000`; Compose sets `http://api:8000` | No |
 | `MODEL_ARTIFACT_ROOT` | API | optional override for `models/registered/` | No |
 
-The application needs **no secrets**. None are defined in the repo, `render.yaml`,
-Dockerfiles or CI.
+No secrets exist anywhere in the repository, Dockerfiles, CI or the Community Cloud
+configuration.
 
 ### Health checks and endpoints
 
 | Check | Where |
 |---|---|
-| API health (Render health check) | `GET /health` -- 200 only when the model service is loaded |
-| Dashboard health (Render health check) | `GET /_stcore/health` |
-| Model metadata | `GET /model-info` |
-| Monitoring | `GET /monitoring/health`, `GET /monitoring/metrics`, `GET /monitoring/drift` |
-| Interactive API docs | `GET /docs` |
+| API health (Docker `HEALTHCHECK`) | `GET /health` -- 200 only when the model service is loaded |
+| Dashboard health (Docker `HEALTHCHECK`) | `GET /_stcore/health` |
+| Model metadata | `GET /model-info` (shown on the dashboard's Model Information tab) |
+| Monitoring | `GET /monitoring/health`, `/monitoring/metrics`, `/monitoring/drift` (Monitoring tab) |
 
-Public URLs: `https://<service-name>.onrender.com`, assigned by Render when the
-Blueprint is created. They will be recorded here once the services exist and have been
-verified.
+On Community Cloud the FastAPI endpoints are not exposed on their own URL -- the
+public app is the dashboard, which calls them in-process. To serve the HTTP API
+publicly you would need a separate host with about 1 GB of memory (see limitations).
+
+Public URL: `https://<chosen-subdomain>.streamlit.app`, assigned when the app is
+deployed. It will be recorded here once the deployment has been verified.
 
 ### Redeploy and rollback
 
-- **Redeploy:** push or merge to `main` (auto-deploys after CI passes), or use
-  **Manual Deploy > Deploy latest commit** on a service in the Render Dashboard.
-- **Rollback:** on a service's **Deploys** page, pick an earlier successful deploy and
-  choose **Rollback > Rollback to this deploy** (only builds Render still retains are
-  available). A Dashboard rollback disables that service's automatic deploys, so revert
-  the bad commit on `main` (`git revert <sha>`, never a force-push) before turning
-  auto-deploy back on. Roll back both services if the bad change touched both.
-- **Stop costs:** suspend or delete `customer-retention-api` in the Render Dashboard.
+- **Redeploy:** push or merge to `main`; Community Cloud picks up the new commit.
+  **Reboot app** in the app's menu restarts it on the current commit (this also resets
+  the in-memory monitoring counters).
+- **Rollback:** revert the bad commit on `main` (`git revert <sha>`, never a
+  force-push) and push; Community Cloud redeploys the reverted code.
 
 ### Production limitations
 
-- **Cost:** the API needs the paid `1c-2g` instance; nothing about it scales to zero.
-- **Free dashboard spin-down:** the Free dashboard spins down after 15 minutes without
-  traffic and takes about a minute to start again. It is not "always on".
-- **Tight dashboard memory:** a full dashboard session peaked at ~470-500 MB under a
-  hard 512 MB limit in local tests. Render's own overhead or heavy concurrent use could
-  still push it over and restart the service; the fix is a larger instance type.
-- **Ephemeral filesystem:** nothing written at runtime survives a redeploy, restart or
-  spin-down. The app writes nothing it needs, but see the next point.
+- **Memory:** the single Community Cloud process holds the dashboard *and* the API's
+  model service. Measured in a Linux container: ~1.1 GB peak steady, ~1.4 GB on a cold
+  start that regenerates the dataset. Community Cloud allocates between 690 MB and
+  2.7 GB per app, so this fits the maximum but is above the guaranteed minimum; under
+  platform memory pressure the app could hit "over its resource limits" and need a
+  reboot.
+- **Sleep:** apps without traffic for 12 hours go to sleep; the next visitor wakes it
+  (then a cold start: dataset regeneration plus model load, about a minute).
+- **Ephemeral filesystem:** the regenerated dataset and all runtime state are lost on
+  reboot or redeploy and rebuilt on the next start.
 - **In-memory monitoring:** `/monitoring/*` counters, latency windows and drift
-  observations live in process memory. They reset on every deploy and restart, and
-  would not be aggregated across multiple instances.
-- **Model/data provenance:** the served model is the committed packaged copy of
-  registry version 1. The dataset is regenerated at build time and fingerprint-checked,
-  so any change to the data pipeline code fails the build until the fingerprint (and,
-  if intended, the model) is deliberately updated.
-- **Public model artifact:** the repository is public, so the packaged model (trained
-  on synthetic data) and its five-row MLflow input example are public too.
-- **No custom domain, auth or rate limiting:** both services are open on
-  `*.onrender.com` with Render-managed HTTPS.
+  observations live in process memory, shared by all viewers of the app, and reset on
+  every restart.
+- **No standalone public API:** the FastAPI service is public only when run elsewhere
+  (Docker/local); Community Cloud serves the dashboard.
+- **Public model artifact:** the repository is public, so the packaged model (trained on
+  synthetic data) and its five-row MLflow input example are public too.
+- **No custom domain, auth or rate limiting** beyond what Community Cloud provides.
 
 ## Project Structure
 To be implemented.

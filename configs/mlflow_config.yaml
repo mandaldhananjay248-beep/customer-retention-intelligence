@@ -37,7 +37,7 @@ expected_model:
 
 # Phase 15: the exact Phase 10 registered model version, packaged as a
 # plain MLflow model directory committed to the repo, so the API can load
-# it on any machine (CI, Docker, Render) without the local, machine-specific
+# it on any machine (CI, Docker, Streamlit Cloud) without the local, machine-specific
 # mlruns.db / mlartifacts registry state -- whose recorded artifact
 # location is an absolute developer-machine path. The files are
 # byte-for-byte copies of registry version 1's artifacts; nothing was

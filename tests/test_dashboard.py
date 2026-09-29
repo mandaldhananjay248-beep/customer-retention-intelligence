@@ -41,26 +41,12 @@ def _mock_response(status_code: int = 200, json_data=None, json_error: bool = Fa
 
 def test_get_api_base_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("API_BASE_URL", raising=False)
-    monkeypatch.delenv("API_HOSTPORT", raising=False)
     assert api_client.get_api_base_url() == api_client.DEFAULT_API_BASE_URL
 
 
 def test_get_api_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("API_BASE_URL", "http://example.com:9999/")
     assert api_client.get_api_base_url() == "http://example.com:9999"
-
-
-def test_get_api_base_url_from_render_private_hostport(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Render's fromService `hostport` is a bare host:port (no scheme)."""
-    monkeypatch.delenv("API_BASE_URL", raising=False)
-    monkeypatch.setenv("API_HOSTPORT", "customer-retention-api:8000")
-    assert api_client.get_api_base_url() == "http://customer-retention-api:8000"
-
-
-def test_get_api_base_url_explicit_url_wins_over_hostport(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
-    monkeypatch.setenv("API_HOSTPORT", "customer-retention-api:8000")
-    assert api_client.get_api_base_url() == "https://api.example.com"
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,8 @@ Run with:
 
 Configuration:
     API_BASE_URL   Base URL of the FastAPI service (default http://localhost:8000)
-    API_HOSTPORT   Used as http://<host:port> when API_BASE_URL is unset (Render)
+    DASHBOARD_API_MODE  "inprocess" to call the FastAPI app in this process
+                        (set by streamlit_app.py for Streamlit Community Cloud)
 
 Note on structure: Streamlit executes this file as `__main__` when run via
 `streamlit run`. All actual page rendering lives inside main(), called
@@ -82,13 +83,13 @@ def _load_customer_features_uncached() -> pd.DataFrame:
         raise FileNotFoundError(f"Feature dataset not found: {FEATURE_DATASET_PATH}")
     # Same frame pd.read_parquet returns, but self_destruct frees each Arrow
     # column as it is converted, cutting the load's peak memory by ~100MB
-    # (Phase 15, for the 512MB Render Free instance).
+    # (Phase 15, measured under a 512MB memory limit).
     return pq.read_table(FEATURE_DATASET_PATH).to_pandas(self_destruct=True, split_blocks=True)
 
 
 # cache_resource, not cache_data: cache_data keeps a pickled copy of this
 # ~150MB frame and hands every rerun a fresh unpickled copy, which peaks
-# above the 512MB of a Render Free instance (Phase 15, measured). The app
+# far above a 512MB memory limit (Phase 15, measured). The app
 # only ever filters this frame (each filter builds a new frame), never
 # mutates it, so one shared read-only instance is safe.
 @st.cache_resource(show_spinner="Loading customer feature dataset...")
